@@ -1,0 +1,7 @@
+node_modules/
+artifacts/
+research/
+web-agent-handoff/
+dist/*.tgz
+*.log
+.DS_Store
