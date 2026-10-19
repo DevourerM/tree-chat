@@ -8,9 +8,11 @@ await writeFile(join(root, 'lib/index.js'), "export {apply, inject} from './host
 const client = await readFile(join(root, 'src/client/index.js'), 'utf8');
 const branches = (await readFile(join(root, 'src/core/branches.js'),'utf8')).replace(/^export /gm,'');
 const layout = (await readFile(join(root, 'src/core/layout.js'),'utf8')).replace(/^export /gm,'');
+const groups = (await readFile(join(root, 'src/core/groups.js'),'utf8')).replace(/^export /gm,'');
+const groupClient=await readFile(join(root,'src/client/groups.js'),'utf8');
 const presentation = (await readFile(join(root, 'src/core/presentation.js'),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'');
 const navigation = (await readFile(join(root, 'src/client/navigation.js'),'utf8')).replace(/^export /gm,'');
 const css = await readFile(join(root, 'src/client/style.css'), 'utf8');
 // Host supplies React through the official singleton module loader.
-await writeFile(join(root, 'lib/client.js'), `window.__ModuleLoader__.load({id:'tree-chat',factory:(require)=>{\nconst React=require('react');\nconst CSS=${JSON.stringify(css)};\n${branches}\n${layout}\n${presentation}\n${navigation}\n${client}\nreturn {apply,inject};\n}});\n`);
+await writeFile(join(root, 'lib/client.js'), `window.__ModuleLoader__.load({id:'tree-chat',factory:(require)=>{\nconst React=require('react');\nconst CSS=${JSON.stringify(css)};\n${branches}\n${layout}\n${groups}\n${presentation}\n${navigation}\n${groupClient}\n${client}\nreturn {apply,inject};\n}});\n`);
 console.log('Built host and native DSH client plugin.');

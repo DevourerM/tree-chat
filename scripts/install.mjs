@@ -1,4 +1,5 @@
-import {readFile,writeFile,mkdir,cp,rename,stat,lstat} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,cp,stat,lstat} from 'node:fs/promises';
+import {renameWithRetry as rename} from '../src/host/files.js';
 import {openSync,readSync,closeSync,existsSync} from 'node:fs';
 import {resolve,join,relative,isAbsolute,dirname} from 'node:path';
 import {homedir} from 'node:os';

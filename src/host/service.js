@@ -4,18 +4,41 @@ import {newGraph, ROOT, pathKey, pathTo, editGraph, publicGraph, assertRevision,
 import {turnsOf, compilePath, textOf, updateNodePresentation, messageLocation} from './context.js';
 import {draftBranchesOf,draftForNode,setDraftBranch,removeDraftBranch} from '../core/branches.js';
 import {conversationView} from '../core/presentation.js';
-import {layoutGraph,nextNodePosition} from '../core/layout.js';
+import {layoutGraph,PlacementIndex} from '../core/layout.js';
+import {PermissionBridge} from './permissions.js';
 
 export class TreeService {
-  constructor(ctx, storage) { this.ctx = ctx; this.storage = storage; this.loaded = new Map(); }
-  newPosition(graph,parentId) {
+  constructor(ctx, storage, permissionSetters) { this.ctx = ctx; this.storage = storage; this.loaded = new Map(); this.permissions=new PermissionBridge(ctx,permissionSetters); }
+  async transferPermissions(from,to) {
+    if(from===to||!this.ctx.get('permissionPresets'))return;
+    const source=await this.load(from),selection=this.permissions.capture(source.native);
+    let agent=this.ctx.agents.get(to);
+    if(agent?.status==='running')throw new TreeError('目标分支正在生成，请完成后再切换权限',409);
+    if(!agent){
+      const target=await this.load(to),presets=this.ctx.get('agentPresets');
+      const presetId=target.events.findLast(e=>e.type==='agent-preset/selected')?.data.agentPreset??target.header.agentPreset;
+      const preset=presets?await presets.resolve(presetId):null;
+      const model=target.events.findLast(e=>e.type==='model/selection')?.data??this.ctx.agentDefaultModel.currentSelection();
+      const result=await this.ctx.agents.resume({resumeSessionId:to,agentOptions:{provider:model.provider,model:model.model},setup:async(agentCtx,resumed)=>{
+        if(presets)await presets.mount(agentCtx,preset.id);
+        this.permissions.apply(resumed.session,selection);
+      }});
+      agent=result.agent;
+    }else this.permissions.apply(agent.session,selection);
+    this.loaded.delete(to);
+  }
+  placement(graph) {
     const projected=conversationView(graph),layout=layoutGraph(projected.graph);
     // Keep existing nodes fixed when a new child changes the automatic tree spans.
     for(const [id,p]of layout.positions){
-      const node=draftForNode(graph,id)??graph.nodes[id];
+      const node=draftForNode(graph,id)??graph.nodes[id]??graph.groups?.[id];
       if(!node.position)node.position={x:p.cx,y:p.cy};
     }
-    return nextNodePosition(conversationView(graph).graph,projected.owners.get(parentId)??parentId);
+    return {index:new PlacementIndex(layout.positions),owners:projected.owners};
+  }
+  newPosition(graph,parentId) {
+    const {index,owners}=this.placement(graph);
+    return index.next(owners.get(parentId)??parentId);
   }
   async shelve(graph, selectedSessionId) {
     const registry = this.ctx.get('workspaceRegistry');
@@ -54,7 +77,7 @@ export class TreeService {
       }
       return event;
     });
-    const value = {events, surface, header: data.session, turns:turnsOf(events)};
+    const value = {events, surface, native, header: data.session, turns:turnsOf(events)};
     this.loaded.delete(sessionId); this.loaded.set(sessionId, {cursor: events.at(-1)?.seq ?? -1, value});
     if (this.loaded.size > 12) this.loaded.delete(this.loaded.keys().next().value);
     return value;
@@ -100,13 +123,19 @@ export class TreeService {
     const pending = draftBranchesOf(graph)[sessionId];
     if(pending&&graph.pendingBranch?.sessionId===sessionId)graph.pendingBranch=pending;
     let promoted = false;
+    let placement;
     for (const turn of newTurns) {
       const promote=pending&&!promoted&&turn.kind==='user';
       const id = promote ? `pending:${sessionId}` : `${sessionId}:${turn.end}`;
       // A deleted historical node must never be resurrected by a polling read.
       if (!graph.nodes[id]) {
         const parent = graph.nodes[binding.head] ? binding.head : graph.active;
-        const position=turn.kind==='user'?(pending&&!promoted&&pending.position?pending.position:this.newPosition(graph,parent)):undefined;
+        let position;
+        if(turn.kind==='user'){
+          placement??=this.placement(graph);
+          position=pending&&!promoted&&pending.position?pending.position:placement.index.next(placement.owners.get(parent)??parent);
+          placement.index.add(id,position);placement.owners.set(id,id);
+        }else if(placement)placement.owners.set(id,placement.owners.get(parent)??parent);
         graph.nodes[id] = {id, parent, label: turn.label, kind: turn.kind, labelMode: 'auto', createdAt: turn.createdAt,
           source: {sessionId, start: turn.start, end: turn.end},...(position?{position}:{})};
         if (pending && !promoted && turn.kind === 'user') {
@@ -118,8 +147,8 @@ export class TreeService {
       binding.head = id;
       if (isCurrentSession) graph.active = id;
       binding.seen = turn.end;
-      binding.key = pathKey(graph, id);
     }
+    binding.key = pathKey(graph,binding.head);
     if (pending) {
       if (promoted) removeDraftBranch(graph,sessionId);
       else pending.parent = binding.head;
@@ -156,7 +185,10 @@ export class TreeService {
     if (changed || created || presentationChanged || titleChanged) await this.storage.save(graph);
     return graph;
   }
-  async get(sessionId) { return publicGraph(await this.sync(sessionId)); }
+  async get(sessionId,knownRevision) {
+    const graph=await this.sync(sessionId);
+    return knownRevision===graph.revision?{unchanged:true,revision:graph.revision}:publicGraph(graph);
+  }
   async locate(sessionId,id) {
     const graph=await this.sync(sessionId), node=Object.hasOwn(graph.nodes,id)?graph.nodes[id]:undefined;
     if(!node)throw new TreeError('节点不存在');
@@ -169,6 +201,7 @@ export class TreeService {
     if(!location){destination=node.source.sessionId;location=messageLocation(source.events,input?.data.id,node.source.start);}
     if(!location)throw new TreeError('该轮聊天记录无法定位');
     if(destination!==sessionId){
+      await this.transferPermissions(sessionId,destination);
       await this.shelve(graph,destination);
     }else{
       const registry=this.ctx.get('workspaceRegistry');
@@ -182,7 +215,7 @@ export class TreeService {
   async edit(sessionId, revision, operation) {
     const graph = await this.sync(sessionId);
     assertRevision(graph, revision);
-    if (!['move','reset-layout','arrange','rename'].includes(operation.type) && Object.keys(graph.bindings).some(id => this.ctx.agents.get(id)?.status === 'running')) throw new TreeError('请等待这棵树中的对话完成后再调整上下文', 409);
+    if (!['move','reset-layout','arrange','rename'].includes(operation.type) && !operation.type?.startsWith('group-') && Object.keys(graph.bindings).some(id => this.ctx.agents.get(id)?.status === 'running')) throw new TreeError('请等待这棵树中的对话完成后再调整上下文', 409);
     const updated = editGraph(graph, operation);
     await this.storage.save(updated);
     return publicGraph(updated);
@@ -209,7 +242,7 @@ export class TreeService {
     const key = pathKey(graph, id);
     if (!force) {
       const existing = Object.entries(graph.bindings).find(([, b]) => b.head === id && b.key === key);
-      if (existing) { graph.active = id; await this.shelve(graph, existing[0]); await this.storage.save(graph); return {sessionId: existing[0], graph: publicGraph(graph)}; }
+      if (existing) { await this.transferPermissions(sessionId,existing[0]); graph.active = id; await this.shelve(graph, existing[0]); await this.storage.save(graph); return {sessionId: existing[0], graph: publicGraph(graph)}; }
     }
     const compiled = await compilePath(graph, id, s => this.load(s), () => `msg-${randomUUID()}`);
     const newId = `session-${randomUUID()}`;
@@ -220,6 +253,7 @@ export class TreeService {
     const defaults = this.ctx.agentDefaultModel.currentSelection();
     const original = (await this.load(sessionId)).events.findLast(e => e.type === 'model/selection')?.data;
     const selection = original?.provider && original?.model ? original : defaults;
+    const permission=this.permissions.capture((await this.load(sessionId)).native);
     const registry = this.ctx.get('workspaceRegistry');
     const workspace = registry?.list().find(w => w.sessionIds.includes(sessionId) || w.sessionIds.includes(graph.id));
     const sessionTitle = this.branchSessionTitle(graph, id);
@@ -230,6 +264,7 @@ export class TreeService {
       agentOptions: {provider: selection.provider, model: selection.model},
       setup: async (agentCtx, agent) => {
         if (presets) await presets.mount(agentCtx, preset.id);
+        this.permissions.apply(agent.session,permission);
         agent.session.append('model/selection', selection);
         agent.session.append('session/title', {title: sessionTitle, messageSeqs: [], source: {kind: 'user'}});
       }
@@ -244,13 +279,13 @@ export class TreeService {
   }
   async branch(sessionId,revision,id){
     let graph=await this.sync(sessionId);assertRevision(graph,revision);
-    const empty=draftForNode(graph,id);
-    if(empty){setDraftBranch(graph,empty);await this.shelve(graph,empty.sessionId);return {sessionId:empty.sessionId,graph:publicGraph(graph)};}
-    if(!Object.hasOwn(graph.nodes,id))throw new TreeError('节点不存在');
     if(Object.keys(graph.bindings).some(s=>this.ctx.agents.get(s)?.status==='running'))throw new TreeError('请等待当前生成结束后再新建分支',409);
+    const empty=draftForNode(graph,id);
+    if(empty){await this.transferPermissions(sessionId,empty.sessionId);setDraftBranch(graph,empty);await this.shelve(graph,empty.sessionId);return {sessionId:empty.sessionId,graph:publicGraph(graph)};}
+    if(!Object.hasOwn(graph.nodes,id))throw new TreeError('节点不存在');
     for(const draft of Object.values(draftBranchesOf(graph))){
       if(draft.parent===id && graph.bindings[draft.sessionId]?.key===pathKey(graph,id)){
-        setDraftBranch(graph,draft);await this.shelve(graph,draft.sessionId);
+        await this.transferPermissions(sessionId,draft.sessionId);setDraftBranch(graph,draft);await this.shelve(graph,draft.sessionId);
         return {sessionId:draft.sessionId,graph:publicGraph(graph)};
       }
     }
@@ -273,6 +308,7 @@ export class TreeService {
     let target=sessionId;
     if(target===draft.sessionId)target=draft.returnSessionId;
     if(!graph.bindings[target] || !graph.nodes[graph.bindings[target]?.head])target=graph.id;
+    await this.transferPermissions(sessionId,target);
     removeDraftBranch(graph,draft.sessionId);graph.undo=[];graph.redo=[];graph.revision++;
     graph.active=graph.nodes[graph.bindings[target]?.head]?.id??ROOT;
     await this.shelve(graph,target);await this.storage.save(graph);

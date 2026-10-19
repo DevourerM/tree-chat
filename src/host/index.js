@@ -3,6 +3,8 @@ import {join} from 'node:path';
 import {TreeStorage} from './storage.js';
 import {TreeService} from './service.js';
 import {TreeError, pathKey} from '../core/graph.js';
+import {setSandboxMode} from '@deepseek-ai/dsh-sandbox-policy';
+import {setApprovalPolicy} from '@deepseek-ai/dsh-user-approval';
 
 export const inject = ['connection', 'sessionQuery', 'sessions', 'agents', 'agentDefaultModel'];
 export function apply(ctx) {
@@ -10,7 +12,7 @@ export function apply(ctx) {
     if (typeof ctx[name]?.[method] !== 'function') throw new Error(`tree-chat不兼容此 DSH：缺少 ${name}.${method}`);
   }
   const storage = new TreeStorage(join(process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'), 'plugins', 'conversation-tree', 'graphs'));
-  const service = new TreeService(ctx, storage);
+  const service = new TreeService(ctx, storage, {setSandboxMode,setApprovalPolicy});
   ctx.on('agent/pre-step', async (payload, next) => {
     const graph = await storage.find(payload.agent.session.id);
     if (graph) {
@@ -26,12 +28,12 @@ export function apply(ctx) {
     fetch: async request => {
       try {
         const raw = await request.text();
-        if (raw.length > 65536) throw new TreeError('请求过大', 413);
+        if (raw.length > 4*1024*1024) throw new TreeError('请求过大', 413);
         let input; try { input = JSON.parse(raw); } catch { throw new TreeError('请求格式错误'); }
         if (typeof input.sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(input.sessionId)) throw new TreeError('无效的会话标识');
         const result = await storage.serial(async () => {
           switch (input.action) {
-            case 'get': return service.get(input.sessionId);
+            case 'get': return service.get(input.sessionId,input.knownRevision);
             case 'locate': return service.locate(input.sessionId,input.id);
             case 'edit': return service.edit(input.sessionId, input.revision, input.operation ?? {});
             case 'preview': return service.preview(input.sessionId, input.id, input.through ?? input.id, input.includeInternal === true);

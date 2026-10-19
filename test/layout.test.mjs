@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {newGraph,editGraph,pathKey} from '../src/core/graph.js';
-import {layoutGraph,arrangedPositions,nextNodePosition} from '../src/core/layout.js';
+import {layoutGraph,arrangedPositions,nextNodePosition,PlacementIndex,nodeVisibleView} from '../src/core/layout.js';
 
 function sample(){
   const graph=newGraph('session-layout');graph.nodes.root.position={x:140,y:-100};
@@ -10,10 +10,29 @@ function sample(){
   }
   graph.active='leaf';return graph;
 }
+
+test('窄侧栏切换后新卡片完整进入视野，已可见时不挪动画布',()=>{
+  const view={x:-900,y:40,zoom:1.4},p={cx:1400,cy:1000,width:168,height:40};
+  const next=nodeVisibleView(view,p,320,700);
+  assert.ok(next.x+(p.cx+p.width/2)*next.zoom<=308.01);
+  assert.ok(next.y+(p.cy+p.height/2)*next.zoom<=688.01);
+  assert.equal(nodeVisibleView(next,p,320,700),next);
+});
 function noOverlaps(graph){
   const nodes=[...layoutGraph(graph).positions.values()];
   for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++)assert.ok(Math.abs(nodes[i].cx-nodes[j].cx)>=Math.max(nodes[i].width,nodes[j].width)+20||Math.abs(nodes[i].cy-nodes[j].cy)>=Math.max(nodes[i].height,nodes[j].height)+20,`${nodes[i].node.id} overlaps ${nodes[j].node.id}`);
 }
+
+test('批量放置与单节点放置一致，并可复用空间索引导入五千轮深对话',()=>{
+  const graph=sample(),index=new PlacementIndex(layoutGraph(graph).positions);
+  assert.deepEqual(index.next('b'),nextNodePosition(graph,'b'));
+  let parent='leaf';
+  for(let i=0;i<5000;i++){
+    const pos=index.next(parent),id=`new-${i}`;index.add(id,pos);
+    assert.ok(Number.isFinite(pos.x)&&Number.isFinite(pos.y));parent=id;
+  }
+  assert.equal(index.positions.size,5005);
+});
 test('整理保留当前左右顺序、统一层级、无重叠且可撤销，不改变上下文路径',()=>{
   const original=sample(),key=pathKey(original,'leaf'),arranged=editGraph(original,{type:'arrange',id:'root'});
   const nodes=arranged.nodes;

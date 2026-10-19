@@ -24,11 +24,15 @@ async function loadHostModules() {
   const sessionUrl = pathToFileURL(resolve(runtimeDir, '@deepseek-ai/dsh-session/lib/index.js')).href;
   const serviceUrl = pathToFileURL(resolve(pluginRoot, 'src/host/service.js')).href;
   const {Session, KNOWN_SESSION_EVENT_TYPES} = await import(sessionUrl);
+  const [{setSandboxMode},{setApprovalPolicy}]=await Promise.all([
+    import(pathToFileURL(resolve(runtimeDir,'@deepseek-ai/dsh-sandbox-policy/lib/index.js')).href),
+    import(pathToFileURL(resolve(runtimeDir,'@deepseek-ai/dsh-user-approval/lib/index.js')).href)
+  ]);
   const source = (await readFile(resolve(pluginRoot, 'src/host/service.js'), 'utf8'))
     .replace("from '@deepseek-ai/dsh-session'", `from ${JSON.stringify(sessionUrl)}`)
     .replace(/from '(\.[^']+)'/g,(_,relative)=>`from ${JSON.stringify(new URL(relative,serviceUrl).href)}`) + `\n//# sourceURL=${serviceUrl}\n`;
   const mod = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`);
-  return {Session, KNOWN_SESSION_EVENT_TYPES, TreeService: mod.TreeService};
+  return {Session, KNOWN_SESSION_EVENT_TYPES, TreeService: mod.TreeService,permissionSetters:{setSandboxMode,setApprovalPolicy}};
 }
 
 function createMockHost(Session, initialTurns = 3) {
@@ -42,6 +46,7 @@ function createMockHost(Session, initialTurns = 3) {
   const pinned = new Set();
   const attached = new Set(['session-root']);
   const agents = new Map([['session-root', {session: rootSession, status: 'idle'}]]);
+  const services=new Map();
 
   const workspace = {
     get sessionIds() { return [...attached]; },
@@ -60,7 +65,7 @@ function createMockHost(Session, initialTurns = 3) {
     logger: {warn() {}},
     get(name) {
       if (name === 'workspaceRegistry') return registry;
-      return undefined;
+      return services.get(name);
     },
     sessions: {
       projections: [],
@@ -78,6 +83,12 @@ function createMockHost(Session, initialTurns = 3) {
     },
     agents: {
       get(id) { return agents.get(id); },
+      async resume({resumeSessionId,setup}) {
+        const session=liveSessions.get(resumeSessionId);assert.ok(session);
+        const agent={session,status:'idle'};
+        if(setup)await setup({},agent);
+        agents.set(resumeSessionId,agent);return {agent};
+      },
       async create({sessionId, seed = [], inheritedEventCount = seed.length, meta = {}, setup}) {
         const header = {
           version: 4,
@@ -127,8 +138,75 @@ function createMockHost(Session, initialTurns = 3) {
     session.append('turn/end', {turn: turnNum, reason: {kind: 'completed'}});
   }
 
-  return {ctx, liveSessions, archived, pinned, agents, appendUserTurn};
+  return {ctx, liveSessions, archived, pinned, agents, appendUserTurn,services};
 }
+
+function installPermissionOwner(host,setters){
+  const specs={'workspace-write':{sandbox:'workspace-write',approval:'ask'},'danger-full-access':{sandbox:'danger-full-access',approval:'never'},auto:{sandbox:'danger-full-access',approval:'ask'}};
+  let autoAvailable=true;
+  const owner={
+    permissionState(session){const state={preset:null,sandbox:null,approval:null};for(const e of session.snapshotEvents(0)){
+      if(e.type==='permission/preset')state.preset=e.data.preset;
+      if(e.type==='sandbox/mode')state.sandbox=e.data.mode;
+      if(e.type==='approval/policy')state.approval=e.data.policy;
+    }return state;},
+    current(session){const s=this.permissionState(session),sandbox=s.sandbox??'workspace-write',approval=s.approval??'ask';
+      if(s.preset==='auto'&&autoAvailable&&sandbox==='danger-full-access')return 'auto';
+      if(specs[s.preset]?.sandbox===sandbox&&specs[s.preset]?.approval===approval)return s.preset;
+      return Object.entries(specs).find(([name,p])=>name!=='auto'&&p.sandbox===sandbox&&p.approval===approval)?.[0]??'custom';
+    },
+    set(session,name){if(name==='auto'&&!autoAvailable)throw Error('Auto admission rejected');const spec=specs[name];if(!spec)throw Error('Unknown preset');
+      if(this.current(session)!==name)session.append('permission/preset',{preset:name});
+      const state=this.permissionState(session);
+      if((state.sandbox??'workspace-write')!==spec.sandbox)setters.setSandboxMode(session,spec.sandbox);
+      if((state.approval??'ask')!==spec.approval)setters.setApprovalPolicy(session,spec.approval);
+    }
+  };
+  host.services.set('permissionPresets',owner);host.services.set('shell',{sandboxMode:'workspace-write'});host.services.set('approval',{config:{policy:'ask'}});
+  return {owner,setAutoAvailable(value){autoAvailable=value;}};
+}
+
+test('TreeService: 原生权限预设与自定义组合继承到新枝、已有枝和取消返回，Auto 准入失败不改目标', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService,permissionSetters}=await loadHostModules();
+  await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
+  const storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','service-permission-'))),host=createMockHost(Session,2);
+  const {owner,setAutoAvailable}=installPermissionOwner(host,permissionSetters),service=new TreeService(host.ctx,storage,permissionSetters);
+  const source=host.liveSessions.get('session-root');owner.set(source,'danger-full-access');
+  let graph=await service.get(source.id);const nodes=Object.values(graph.nodes).filter(n=>n.source);
+  const first=await service.branch(source.id,graph.revision,nodes[0].id),target=host.liveSessions.get(first.sessionId);
+  assert.equal(owner.current(target),'danger-full-access');
+  owner.set(target,'workspace-write');
+  const root=await service.activate(first.sessionId,first.graph.revision,nodes[1].id);
+  assert.equal(owner.current(source),'workspace-write');
+  host.agents.delete(first.sessionId);
+  permissionSetters.setSandboxMode(source,'read-only');permissionSetters.setApprovalPolicy(source,'never');
+  graph=await service.get(source.id);const reused=await service.branch(source.id,graph.revision,`pending:${first.sessionId}`);
+  assert.equal(owner.current(target),'custom');assert.equal(owner.permissionState(target).sandbox,'read-only');assert.equal(owner.permissionState(target).approval,'never');
+  assert.ok(host.agents.has(first.sessionId),'已卸载的目标分支通过原生 resume 恢复后继承权限');
+  owner.set(target,'danger-full-access');
+  await service.cancelBranch(first.sessionId,reused.graph.revision,`pending:${first.sessionId}`);
+  assert.equal(owner.current(source),'danger-full-access');
+  owner.set(source,'auto');graph=await service.get(source.id);
+  const autoBranch=await service.branch(source.id,graph.revision,nodes[0].id);
+  const autoTarget=host.liveSessions.get(autoBranch.sessionId);assert.equal(owner.current(autoTarget),'auto');
+  owner.set(autoTarget,'workspace-write');setAutoAvailable(false);
+  const before=autoTarget.seq;
+  await assert.rejects(()=>service.transferPermissions(source.id,autoBranch.sessionId),/自动审查|Auto/);
+  assert.equal(autoTarget.seq,before);
+});
+
+test('TreeService: 大批历史轮次只构建一次空间索引，条件轮询只回传变化', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules();
+  await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
+  const host=createMockHost(Session,2000),storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','service-batch-')));
+  const service=new TreeService(host.ctx,storage);let builds=0;
+  const placement=service.placement.bind(service);service.placement=(...args)=>{builds++;return placement(...args);};
+  const graph=await service.get('session-root');assert.equal(Object.keys(graph.nodes).length,2001);assert.equal(builds,1);
+  assert.deepEqual(await service.get('session-root',graph.revision),{unchanged:true,revision:graph.revision});
+  host.appendUserTurn('session-root','新的问题');
+  const next=await service.get('session-root',graph.revision);assert.equal(Object.keys(next.nodes).length,2002);assert.ok(next.revision>graph.revision);
+  assert.equal(builds,2);
+});
 
 test('TreeService: 多个空分枝持久保留；避让手动节点；完成后原 ID 原位填充，只删除指定空枝', {skip: !runtimeDir && '未配置 DSH_DEV_RUNTIME，跳过宿主服务集成测试'}, async()=>{
   const {Session,TreeService}=await loadHostModules();

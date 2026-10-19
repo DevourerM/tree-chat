@@ -4,8 +4,9 @@ import {launchBrowser, resolveArtifactsDir} from './_env.mjs';
 
 const artifactsDir = resolveArtifactsDir();
 const browser = await launchBrowser();
+let page;
 try {
-  const page=await browser.newPage({viewport:{width:1480,height:980}}), errors=[];
+  page=await browser.newPage({viewport:{width:1480,height:980}});const errors=[];
   page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(15000);
   await page.goto(process.argv[2],{waitUntil:'networkidle'});
   const consent=page.getByRole('button',{name:'继续',exact:true});if(await consent.count())await consent.click();
@@ -81,4 +82,5 @@ try {
   await root.getByRole('textbox',{name:'搜索节点',exact:true}).fill('');
   assert.equal(errors.length,0,JSON.stringify(errors));
   console.log('PASS: native sidebar resized to 320/480/650 × 700/1000, light/dark, readable nodes, pending node at 320px, no toolbar overflow, no preview, keyboard and search.');
-} finally {await browser.close();}
+} catch(error){await page?.screenshot({path:join(artifactsDir,'tree-chat-layout-failure.png'),fullPage:true});throw error;}
+finally {await browser.close();}

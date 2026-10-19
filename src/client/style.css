@@ -458,4 +458,15 @@ no duplicate panel heading. */
 .st-root .st-node-menu button kbd {margin-left:auto;color:var(--st-muted);font:inherit;font-size:11px}
 .st-root .st-node-menu hr {border:0;border-top:1px solid var(--st-line);margin:4px 0}
 .st-root .st-dialog {position:absolute;z-index:9;left:12px;right:12px;bottom:12px;box-shadow:0 6px 24px #00000020}
+.st-root .st-group {border-color:color-mix(in srgb,var(--st-accent) 32%,var(--st-border));background:color-mix(in srgb,var(--st-accent) 5%,var(--st-card))}
+.st-root .st-group .st-node-body {padding-right:76px}
+.st-root .st-group-count {position:absolute;right:54px;top:50%;transform:translateY(-50%);font-size:10px;line-height:17px;min-width:19px;text-align:center;color:var(--st-muted);background:var(--st-hover);border-radius:4px;pointer-events:none}
+.st-root .st-group-tag {position:absolute;left:5px;top:-14px;max-width:140px;height:18px;padding:0 5px;border:1px solid var(--st-border);border-radius:4px;background:var(--st-card);color:var(--st-muted);font-size:10px;line-height:16px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;z-index:2}
+.st-root .st-group-tag:hover {color:var(--st-accent);border-color:var(--st-accent)}
+.st-root .st-group-dialog {display:flex;flex-direction:column;gap:12px;padding:14px;background:var(--st-card);border:1px solid var(--st-border);border-radius:10px;max-height:calc(100% - 24px);overflow:auto}
+.st-root .st-group-dialog label {display:flex;flex-direction:column;gap:6px;color:var(--st-secondary);font-size:12px}
+.st-root .st-group-dialog input,.st-root .st-group-dialog select {width:100%;min-width:0;padding:7px 8px;color:var(--st-text);background:var(--st-bg);border:1px solid var(--st-border);border-radius:6px}
+.st-root .st-dialog-actions {display:flex;justify-content:flex-end;gap:8px}
+.st-root .st-dialog-actions button {padding:5px 12px;border:1px solid var(--st-border);border-radius:6px;background:var(--st-card);color:var(--st-text)}
+.st-root .st-dialog-actions button[type=submit] {background:var(--st-accent);color:#fff;border-color:var(--st-accent)}
 .st-root .st-rename {padding:12px;background:var(--st-card);border:1px solid var(--st-border);border-radius:8px}

@@ -1,6 +1,15 @@
 export const NODE_SIZES = {s:{width:168,height:40},m:{width:188,height:44},l:{width:200,height:44}};
 const COLUMN = 228, STEP = 80;
 
+/** Clamp a newly selected card into the viewport after a native pane transition. */
+export function nodeVisibleView(view,position,width,height,pad=12){
+  const z=view.zoom,left=view.x+(position.cx-position.width/2)*z,right=left+position.width*z;
+  const top=view.y+(position.cy-position.height/2)*z,bottom=top+position.height*z;
+  const x=view.x+(left<pad?pad-left:right>width-pad?width-pad-right:0);
+  const y=view.y+(top<pad?pad-top:bottom>height-pad?height-pad-bottom:0);
+  return x===view.x&&y===view.y?view:{...view,x,y};
+}
+
 function treePositions(graph, compare) {
   const children=new Map();
   for(const node of Object.values(graph.nodes)){
@@ -45,11 +54,29 @@ export function arrangedPositions(graph) {
 
 /** Find the closest free horizontal slot below the actual parent, not its old slot. */
 export function nextNodePosition(graph,parentId) {
-  const positions=layoutGraph(graph).positions,parent=positions.get(parentId);
-  if(!parent)throw new Error('找不到新节点的父节点');
-  const y=parent.cy+STEP,blocked=[...positions.values()].filter(p=>Math.abs(p.cy-y)<68);
+  return new PlacementIndex(layoutGraph(graph).positions).next(parentId);
+}
+
+/** Reuse spatial rows across a batch of imported turns instead of rebuilding the tree per turn. */
+export class PlacementIndex {
+  constructor(positions){
+    this.positions=new Map();this.rows=new Map();
+    for(const [id,p]of positions)this.add(id,{x:p.cx,y:p.cy});
+  }
+  add(id,position){
+    // Promotion of a durable empty branch keeps its existing slot.
+    if(this.positions.has(id))return;
+    const p={cx:position.x,cy:position.y},row=Math.floor(p.cy/STEP);
+    this.positions.set(id,p);const list=this.rows.get(row)??[];list.push(p);this.rows.set(row,list);
+  }
+  next(parentId){
+    const parent=this.positions.get(parentId);
+    if(!parent)throw new Error('找不到新节点的父节点');
+    const y=parent.cy+STEP,row=Math.floor(y/STEP),blocked=[];
+    for(let r=row-1;r<=row+1;r++)for(const p of this.rows.get(r)??[])if(Math.abs(p.cy-y)<68)blocked.push(p);
   const candidates=[parent.cx,...blocked.flatMap(p=>[p.cx+COLUMN,p.cx-COLUMN])];
   candidates.sort((a,b)=>Math.abs(a-parent.cx)-Math.abs(b-parent.cx)||b-a);
   const x=candidates.find(x=>blocked.every(p=>Math.abs(p.cx-x)>=COLUMN-0.01));
   return {x,y};
+  }
 }

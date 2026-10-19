@@ -1,6 +1,7 @@
 import {draftBranchesOf,draftForNode,removeDraftBranch} from './branches.js';
 import {conversationView} from './presentation.js';
 import {arrangedPositions} from './layout.js';
+import {validateGroups,applyGroupEdit,moveGroupState,reconcileGroupState} from './group-state.js';
 export const SCHEMA_VERSION = 1;
 export const ROOT = 'root';
 export const pendingId = graph => graph?.pendingBranch ? `pending:${graph.pendingBranch.sessionId}` : null;
@@ -19,9 +20,10 @@ export function pathTo(graph, id, requireRoot = true) {
     seen.add(id);
     const node = Object.hasOwn(graph.nodes, id) ? graph.nodes[id] : undefined;
     if (!node) throw new TreeError('节点不存在');
-    path.unshift(node);
+    path.push(node);
     id = node.parent;
   }
+  path.reverse();
   if (requireRoot && path[0]?.id !== ROOT) throw new TreeError('这条旧分支未连接到起点，请在节点菜单中选择“接回起点”');
   return path;
 }
@@ -58,10 +60,12 @@ export function validateGraph(graph) {
     if(pending.sessionId!==sessionId || (pending.label!==undefined&&(typeof pending.label!=='string'||!pending.label.trim()||pending.label.length>200)))throw new TreeError('无效的分支节点');
     if(pending.position!==undefined&&(!pending.position || !Number.isFinite(pending.position.x) || !Number.isFinite(pending.position.y) || Math.abs(pending.position.x)>1000000 || Math.abs(pending.position.y)>1000000))throw new TreeError('无效的节点位置');
   }
+  try{validateGroups(graph.nodes,graph.groups);}catch(error){throw new TreeError(error.message);}
   return graph;
 }
-const snapshot = graph => structuredClone({nodes: graph.nodes, active: graph.active, pendingBranch:graph.pendingBranch,draftBranches:graph.draftBranches});
+const snapshot = graph => structuredClone({nodes: graph.nodes, active: graph.active, pendingBranch:graph.pendingBranch,draftBranches:graph.draftBranches,groups:graph.groups});
 export function editGraph(original, operation) {
+  if(typeof operation?.type!=='string')throw new TreeError('无效的编辑操作');
   const graph = structuredClone(original);
   if (operation.type === 'undo' || operation.type === 'redo') {
     const from = operation.type === 'undo' ? 'undo' : 'redo', to = from === 'undo' ? 'redo' : 'undo';
@@ -71,12 +75,17 @@ export function editGraph(original, operation) {
     Object.assign(graph, prior);
     if (prior.pendingBranch === undefined) delete graph.pendingBranch;
     if (prior.draftBranches === undefined) delete graph.draftBranches;
+    if (prior.groups === undefined) delete graph.groups;
+  } else if(operation.type.startsWith('group-')){
+    if(operation.type!=='group-toggle'){graph.undo.push(snapshot(graph));graph.undo=graph.undo.slice(-30);graph.redo=[];}
+    try{applyGroupEdit(graph,operation);}catch(error){throw new TreeError(error.message);}
   } else {
     // Normalize the legacy alias to the same object before editing positions or labels.
     if(graph.draftBranches&&graph.pendingBranch)graph.pendingBranch=graph.draftBranches[graph.pendingBranch.sessionId]??graph.pendingBranch;
-    const draft=draftForNode(graph,operation.id),isPending=Boolean(draft),node=draft??(Object.hasOwn(graph.nodes,operation.id)?graph.nodes[operation.id]:undefined);
+    const draft=draftForNode(graph,operation.id),isPending=Boolean(draft),group=Object.hasOwn(graph.groups??{},operation.id)?graph.groups[operation.id]:null,node=draft??group??(Object.hasOwn(graph.nodes,operation.id)?graph.nodes[operation.id]:undefined);
     if (!node) throw new TreeError('节点不存在');
     if (isPending && !['move','rename'].includes(operation.type)) throw new TreeError('请通过节点菜单删除空分支');
+    if(group&&!['move','rename'].includes(operation.type))throw new TreeError('请展开集合后操作内部节点');
     if (operation.type === 'delete' || operation.type === 'reparent') for(const draft of Object.values(draftBranchesOf(graph))){
       const pendingAncestors = new Set(pathTo(graph,draft.parent,false).map(n => n.id));
       if (pendingAncestors.has(operation.id)) throw new TreeError('请先完成或取消当前待输入分支，再修改其上游节点');
@@ -86,16 +95,19 @@ export function editGraph(original, operation) {
     switch (operation.type) {
       case 'rename':
         if (typeof operation.label !== 'string' || !operation.label.trim() || operation.label.length > 200) throw new TreeError('名称需为 1–200 个字符');
-        node.label = operation.label.trim(); node.labelMode = 'custom'; break;
+        if(group){if(operation.label.trim().length>80)throw new TreeError('集合名称需为 1–80 个字符');group.name=operation.label.trim();}
+        else{node.label = operation.label.trim(); node.labelMode = 'custom';}break;
       case 'move':
-        node.position = {x:operation.position?.x,y:operation.position?.y}; break;
+        if(group)moveGroupState(graph,group.id,{x:operation.position?.x,y:operation.position?.y});
+        else node.position = {x:operation.position?.x,y:operation.position?.y};break;
       case 'reset-layout':
         for (const n of Object.values(graph.nodes)) delete n.position;
         for(const draft of Object.values(draftBranchesOf(graph)))delete draft.position;
         break;
       case 'arrange':
         for(const [id,position]of Object.entries(arrangedPositions(conversationView(graph,operation.includeInternal===true).graph))){
-          const target=draftForNode(graph,id)??graph.nodes[id];target.position=position;
+          if(Object.hasOwn(graph.groups??{},id))moveGroupState(graph,id,position);
+          else {const target=draftForNode(graph,id)??graph.nodes[id];target.position=position;}
         }
         break;
       case 'reparent':
@@ -127,6 +139,7 @@ export function editGraph(original, operation) {
       default: throw new TreeError('未知的编辑操作');
     }
   }
+  reconcileGroupState(graph);
   for(const draft of Object.values(draftBranchesOf(graph)))if(!graph.nodes[draft.parent]||!graph.bindings[draft.sessionId]||!graph.bindings[draft.returnSessionId]||graph.bindings[draft.sessionId].head!==draft.parent)removeDraftBranch(graph,draft.sessionId);
   graph.revision++;
   return validateGraph(graph);
