@@ -5,6 +5,9 @@ import {launchBrowser, resolveArtifactsDir, resolveTestHome} from './_env.mjs';
 
 const artifactsDir = resolveArtifactsDir();
 const home = resolveTestHome('test-home-v4');
+const humanInputs = request => request.messages
+  .filter(m => m.role === 'user' && (!m.source?.kind || m.source.kind === 'user'))
+  .map(m => m.content.filter(b => b.type === 'text').map(b => b.text).join(''));
 await unlink(join(home, 'plugins/conversation-tree/graphs/session-tree-demo.json')).catch(e => { if (e.code !== 'ENOENT') throw e; });
 
 const browser = await launchBrowser();
@@ -103,7 +106,7 @@ try {
   await nodeBtn('问题 2新枝首轮').waitFor();
 
   const promotedReq = JSON.parse(await readFile(join(artifactsDir, 'last-model-request.json'), 'utf8'));
-  assert.deepEqual(promotedReq.users, ['问题 1', '问题 2', '问题 2新枝首轮']);
+  assert.deepEqual(humanInputs(promotedReq), ['问题 1', '问题 2', '问题 2新枝首轮']);
   const promotedStyle = await cardOf('问题 2新枝首轮').evaluate(el => ({left: el.style.left, top: el.style.top}));
   assert.equal(promotedStyle.left, `${draggedPos.x}px`, 'promoted node must inherit pending node X coordinate');
   assert.equal(promotedStyle.top, `${draggedPos.y}px`, 'promoted node must inherit pending node Y coordinate');
@@ -140,7 +143,7 @@ try {
   await page.getByText('上下文验证：问题 根分枝首轮', {exact: true}).first().waitFor({timeout: 20000});
   await nodeBtn('问题 根分枝首轮').waitFor();
   const rootReq = JSON.parse(await readFile(join(artifactsDir, 'last-model-request.json'), 'utf8'));
-  assert.deepEqual(rootReq.users, ['问题 根分枝首轮'], 'branch from root must not include any prior user turns');
+  assert.deepEqual(humanInputs(rootReq), ['问题 根分枝首轮'], 'branch from root must not include any prior user turns');
 
   // 6. Resume another existing leaf branch ("问题 4") via "继续这条分支" -> unarchives root and archives others
   await nodeBtn('问题 4').click({button: 'right'});

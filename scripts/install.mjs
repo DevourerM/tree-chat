@@ -41,7 +41,7 @@ if(args.includes('--uninstall')){
   console.log('tree-chat已从 Desktop 插件组合中移除。图数据、原始对话和插件文件均保留。重启 DSH 生效。');
 }else{
   const runtime=bundledJson('package.json');
-  if(runtime.version!=='0.2.0-rc.2')throw new Error(`此版本尚未验证：DSH ${runtime.version}。请先运行兼容测试后升级插件。`);
+  if(!['0.2.0-rc.2','0.2.1-rc.2'].includes(runtime.version))throw new Error(`此版本尚未验证：DSH ${runtime.version}。请先运行兼容测试后升级插件。`);
   await stat(join(source,'lib','index.js'));await stat(join(source,'lib','client.js'));
   const spec='file:'+source.replaceAll('\\','/');
   let state;try{state=JSON.parse(await readFile(statePath,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}

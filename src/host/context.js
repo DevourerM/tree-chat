@@ -51,6 +51,7 @@ export async function compilePath(graph, head, load, uuid) {
     return cache.get(id);
   };
   const origin = await read(graph.id);
+  let cwd = origin.header.cwd;
   const seed = []; let turn = 1;
   const append = (type, data, surface = false, time = Date.now()) => {
     const event = {type, data: structuredClone(data), seq: seed.length, time};
@@ -95,6 +96,7 @@ export async function compilePath(graph, head, load, uuid) {
   for (const node of path) {
     if (node.id === ROOT) continue;
     const source = await read(node.source.sessionId);
+    cwd = source.events.findLast(e => e.seq <= node.source.end && e.type === 'working-directory/change')?.data.cwd ?? source.header.cwd ?? cwd;
     const messages = source.surface.filter(e => e.seq >= node.source.start && e.seq <= node.source.end && e.type !== 'system/message' && !(node.source.sessionId === graph.id && baselineSeqs.has(e.seq)));
     if (!messages.some(e => e.type === 'user/message')) throw new TreeError('这个节点已被 DSH 压缩替代，无法单独重连；请使用压缩前的原始会话');
     turn++;
@@ -128,5 +130,5 @@ export async function compilePath(graph, head, load, uuid) {
     append('turn/end', {turn, reason: {kind: 'completed'}});
   }
   if ([...calls.keys()].some(id => !answered.has(id))) throw new TreeError('这条路径有未完成的工具调用，请等待对话完成后再创建枝');
-  return {seed, origin, path: path.map(n => n.id)};
+  return {seed, origin, cwd, path: path.map(n => n.id)};
 }

@@ -210,7 +210,7 @@ export class TreeService {
     const sessionTitle = this.branchSessionTitle(graph, id);
     const handle = await this.ctx.agents.create({sessionId: newId, seed: compiled.seed,
       inheritedEventCount: compiled.seed.length,
-      meta: {...(compiled.origin.header.cwd ? {cwd: compiled.origin.header.cwd} : {}), parentSession: graph.id, isSeeded: true,
+      meta: {...(compiled.cwd ? {cwd: compiled.cwd} : {}), parentSession: graph.id, isSeeded: true,
         ...(preset ? {agentPreset: preset.id} : {})},
       agentOptions: {provider: selection.provider, model: selection.model},
       setup: async (agentCtx, agent) => {

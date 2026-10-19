@@ -10,8 +10,8 @@ tree-chat 是采用 DSH 标准插件格式的第三方插件，使用原生右�
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 插件版本 | **0.2.1** |
-| 已验证宿主 | **DeepSeek Harness 0.2.0-rc.2** |
+| 插件版本 | **0.2.2** |
+| 已验证宿主 | **DeepSeek Harness 0.2.0-rc.2 / 0.2.1-rc.2** |
 | 已验证系统 | Windows |
 | 插件格式 | 标准 `dsh.bundle` + `dsh.client` |
 | 其他系统及宿主版本 | 尚未完成验证，不保证可用 |
@@ -26,7 +26,7 @@ tree-chat 是采用 DSH 标准插件格式的第三方插件，使用原生右�
 2. 在 **包名或地址** 中粘贴完整地址：
 
    ```text
-   https://github.com/DevourerM/tree-chat/releases/download/v0.2.1/tree-chat-0.2.1.tgz
+   https://github.com/DevourerM/tree-chat/releases/download/v0.2.2/tree-chat-0.2.2.tgz
    ```
 
 3. 确认插件为 **tree-chat**，点击 **安装**。
@@ -38,17 +38,17 @@ tree-chat 是采用 DSH 标准插件格式的第三方插件，使用原生右�
 也可在同一输入框使用固定标签的 Git 地址：
 
 ```text
-git+https://github.com/DevourerM/tree-chat.git#v0.2.1
+git+https://github.com/DevourerM/tree-chat.git#v0.2.2
 ```
 
 推荐 `.tgz` 地址，它不要求安装 Git。插件尚未发布到 npm，请不要只填写 `tree-chat`，以免解析到其他来源的同名包。
 
 ### 网络受限时离线安装
 
-从 [Releases](https://github.com/DevourerM/tree-chat/releases) 下载 `tree-chat-0.2.1.tgz`，在 DSH 的同一输入框填写其**本机绝对路径**，例如：
+从 [Releases](https://github.com/DevourerM/tree-chat/releases) 下载 `tree-chat-0.2.2.tgz`，在 DSH 的同一输入框填写其**本机绝对路径**，例如：
 
 ```text
-C:\Downloads\tree-chat-0.2.1.tgz
+C:\Downloads\tree-chat-0.2.2.tgz
 ```
 
 选择发行附件 `.tgz`，不要选 GitHub 自动生成的 “Source code” ZIP。远程 Web Host 的本地路径指向 Host 电脑，而不是浏览器所在电脑。
@@ -67,6 +67,7 @@ C:\Downloads\tree-chat-0.2.1.tgz
 - 删除中间轮次后自动接好后续路径，支持撤销、重做。
 - 同一棵树在 DSH 左侧默认仅保留当前会话可见，其他枝通过原生归档收纳；用户置顶会话例外。
 - 继承 DSH 原生侧栏和主题，切换分支时保留树的视野与布局。
+- 隐藏或收起的侧栏暂停轮询，重新打开时立即同步；新版宿主切换工作目录后，分枝继承所选节点当时的目录。
 
 连线只展示关系和当前路径；创建分支、裁剪上下文都通过按钮完成，无需手工拉线。
 
@@ -158,7 +159,7 @@ C:\Downloads\tree-chat-0.2.1.tgz
 
 **压缩或工具配对提示？** 宿主已压缩替代的历史可能不再有可独立重组的有效消息；未完成工具记录也不能安全重建。插件会拒绝应用，原会话保留。
 
-**DSH 升级后能用吗？** 当前仅验证 0.2.0-rc.2，宿主 API 或界面语义标记变化可能需要适配。先查看 Release 兼容性记录。
+**DSH 升级后能用吗？** 当前已验证 0.2.0-rc.2 和 0.2.1-rc.2，宿主 API 或界面语义标记变化可能需要适配。先查看 [兼容性记录](docs/COMPATIBILITY.md) 和 Release 说明。
 
 ## 开发
 

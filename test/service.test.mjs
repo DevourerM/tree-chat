@@ -24,13 +24,13 @@ async function loadHostModules() {
   const graphUrl = pathToFileURL(resolve(pluginRoot, 'src/core/graph.js')).href;
   const contextUrl = pathToFileURL(resolve(pluginRoot, 'src/host/context.js')).href;
   const serviceUrl = pathToFileURL(resolve(pluginRoot, 'src/host/service.js')).href;
-  const {Session} = await import(sessionUrl);
+  const {Session, KNOWN_SESSION_EVENT_TYPES} = await import(sessionUrl);
   const source = (await readFile(resolve(pluginRoot, 'src/host/service.js'), 'utf8'))
     .replace("from '@deepseek-ai/dsh-session'", `from ${JSON.stringify(sessionUrl)}`)
     .replace("from '../core/graph.js'", `from ${JSON.stringify(graphUrl)}`)
     .replace("from './context.js'", `from ${JSON.stringify(contextUrl)}`) + `\n//# sourceURL=${serviceUrl}\n`;
   const mod = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`);
-  return {Session, TreeService: mod.TreeService};
+  return {Session, KNOWN_SESSION_EVENT_TYPES, TreeService: mod.TreeService};
 }
 
 function createMockHost(Session, initialTurns = 3) {
@@ -131,6 +131,26 @@ function createMockHost(Session, initialTurns = 3) {
 
   return {ctx, liveSessions, archived, pinned, agents, appendUserTurn};
 }
+
+test('TreeService: 新宿主工作目录变更在派生 Session 中生效，历史节点不继承未来目录', {skip: !runtimeDir && '未配置 DSH_DEV_RUNTIME，跳过宿主服务集成测试'}, async t => {
+  const {Session, KNOWN_SESSION_EVENT_TYPES, TreeService} = await loadHostModules();
+  if(!KNOWN_SESSION_EVENT_TYPES.has('working-directory/change'))return t.skip('旧宿主不支持聊天中切换工作目录');
+  await mkdir(join(process.cwd(), 'artifacts'), {recursive:true});
+  const storage = new TreeStorage(await mkdtemp(join(process.cwd(), 'artifacts', 'service-cwd-')));
+  const host=createMockHost(Session,1), service=new TreeService(host.ctx,storage);
+  const original=host.liveSessions.get('session-root');
+  const changed=join(process.cwd(),'changed-project'),future=join(process.cwd(),'future-project');
+  original.append('working-directory/change',{cwd:changed});
+  host.appendUserTurn('session-root','目录变更后提问');
+  original.append('working-directory/change',{cwd:future});
+  const graph=await service.get('session-root');
+  const selected=Object.values(graph.nodes).find(n=>n.label==='目录变更后提问');
+  const branch=await service.branch('session-root',graph.revision,selected.id);
+  assert.equal(host.liveSessions.get(branch.sessionId).header.cwd,changed);
+  const first=Object.values(graph.nodes).find(n=>n.label==='问题 1');
+  const earlier=await service.branch(branch.sessionId,branch.graph.revision,first.id);
+  assert.equal(host.liveSessions.get(earlier.sessionId).header.cwd,original.header.cwd);
+});
 
 test('TreeService: 新建分支、重复点击防抖、单入口归档（含原根与置顶豁免）、取消分支回退', {skip: !runtimeDir && '未配置 DSH_DEV_RUNTIME，跳过宿主服务集成测试'}, async () => {
   const {Session, TreeService} = await loadHostModules();

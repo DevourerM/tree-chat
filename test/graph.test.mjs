@@ -44,6 +44,24 @@ test('缺失工具结果时拒绝上下文，未完成轮次不进入树',async(
   await assert.rejects(()=>compilePath(chain(),'4',async()=>data,()=> 'new'),/未完成的工具/);
   assert.equal(turnsOf(data.events.slice(0,-1)).length,3);
 });
+test('历史分支继承该节点的工作目录，删除桥接和跨来源仍尊重路径末端，不带入未来变更',async()=>{
+  const data=fixture(3,false);data.header.cwd='/project/original';
+  const second=data.events.findIndex(e=>e.type==='turn/start'&&e.data.turn===2);
+  data.events.splice(second,0,{type:'working-directory/change',data:{cwd:'/project/second'},time:2000});
+  data.events.push({type:'working-directory/change',data:{cwd:'/project/future'},time:3000});
+  data.events.forEach((e,i)=>{e.seq=i;});data.surface=data.events.filter(e=>e.surfaceOp);
+  const graph=newGraph(data.header.id);
+  turnsOf(data.events).forEach((t,i)=>{const id=String(i+1);graph.nodes[id]={id,parent:i?String(i):'root',label:t.label,createdAt:t.createdAt,source:{sessionId:graph.id,start:t.start,end:t.end}};graph.active=id;});
+  const read=async()=>data;
+  assert.equal((await compilePath(graph,'root',read)).cwd,'/project/original');
+  assert.equal((await compilePath(graph,'1',read)).cwd,'/project/original');
+  assert.equal((await compilePath(graph,'2',read)).cwd,'/project/second');
+  assert.equal((await compilePath(editGraph(graph,{type:'delete',id:'2'}),'3',read)).cwd,'/project/second');
+  const child=fixture(1,false);child.header.id='session-other';child.header.cwd='/project/other';
+  const childTurn=turnsOf(child.events)[0];
+  graph.nodes.side={id:'side',parent:'2',label:childTurn.label,createdAt:childTurn.createdAt,source:{sessionId:child.header.id,start:childTurn.start,end:childTurn.end}};
+  assert.equal((await compilePath(graph,'side',async id=>id===graph.id?data:child)).cwd,'/project/other');
+});
 test('持久化原子保存、会话映射与串行操作',async()=>{
   await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
   const dir=await mkdtemp(join(process.cwd(),'artifacts','storage-test-'));const store=new TreeStorage(dir), graph=chain();
