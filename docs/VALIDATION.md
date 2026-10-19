@@ -15,6 +15,9 @@
 - 500 轮真实 Host 对话界面渲染少于 80 个卡片；条件轮询、屏幕外搜索、原生首条历史定位正常。大于 250 个节点才启用视野渲染。
 - Windows 原子替换对短暂的 EPERM/EBUSY/EACCES 进行有限重试，避免文件扫描或读者短暂占用导致保存/更新失败；不会无限重试或吞掉最终错误。
 - 安装辅助工具：校验、安装、卸载、旧包名迁移、无备份重复更新均通过。
+- [1.0.0 代码 CI](https://github.com/DevourerM/tree-chat/actions/runs/39241471348) 通过。独立源码在无 DSH 运行时环境完成构建、27 项核心测试及发行包验证，6 项原生服务测试明确跳过。
+- [v1.0.0 公开发行包](https://github.com/DevourerM/tree-chat/releases/tag/v1.0.0) 已在全新 0.2.1-rc.2 Host 中通过原生「插件 → 添加插件」使用公开 URL 安装并立即启用；实际版本 1.0.0，客户端 SHA-256 与已验证源码及本机 Desktop 安装一致。
+- 本机 Desktop 直接更新，未增加备份，未关闭日常 DSH 或改动日常聊天。
 
 复现：scripts/ui-groups-test.mjs 使用 8 轮夹具；scripts/ui-large-tree-test.mjs 使用 500 轮；其余 GUI 默认 4 轮。使用 scripts/prepare-dev.mjs 创建独立 TREE_TEST_HOME，运行原生 Web Host 后向脚本传入鉴权 URL。测试模型为本地固定响应，不使用日常用户会话。
 
