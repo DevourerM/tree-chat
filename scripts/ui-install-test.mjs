@@ -13,6 +13,9 @@ try{
     const startup=page.getByRole('button',{name:/^(继续|稍后配置)$/}).first();
     try{await startup.waitFor({state:'visible',timeout:3000});await startup.click();}catch{break;}
   }
+  // 0.2.1 shows a dismissible account prompt in an empty profile.
+  const accountPrompt=page.getByRole('dialog').filter({hasText:'开始使用'});
+  if(await accountPrompt.count())await accountPrompt.getByRole('button',{name:'关闭',exact:true}).click();
   await page.screenshot({path:join(artifactsDir,'install-ui-before.png'),fullPage:true});
   await page.getByText('插件',{exact:true}).first().click();
   await page.getByRole('button',{name:'添加插件',exact:true}).click();
