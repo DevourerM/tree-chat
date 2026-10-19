@@ -37,8 +37,9 @@ try {
   await page.getByRole('button',{name:'打开 tree-chat'}).click();
   await resumed;
   await root.locator('.st-pending.st-current').waitFor();
+  await root.locator('.st-pending.st-current .st-node-body').click({button:'right'});
   const cancelled=response('cancel-branch');
-  await root.getByRole('button',{name:'取消新分支',exact:true}).click();
+  await root.getByRole('menuitem',{name:'删除空分支',exact:true}).click();
   await cancelled;
   assert.equal(errors.length,0,JSON.stringify(errors));
   console.log('PASS: retained hidden panels and collapsed sidebar stop polling; visible panel syncs and refreshes on reopen.');

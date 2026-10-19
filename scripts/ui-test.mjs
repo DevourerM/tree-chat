@@ -50,7 +50,7 @@ try {
   assert.equal(branch.graph.bindings['session-tree-demo'].autoArchived,true);
   assert.equal(branch.graph.bindings[result.sessionId].autoArchived,true);
   assert.equal(branch.graph.bindings[branch.sessionId].autoArchived,false);
-  await root.locator('.st-pending.st-current .st-node-title').filter({hasText:'输入新消息…'}).waitFor();
+  await root.locator('.st-pending.st-current .st-node-title').filter({hasText:'新分支'}).waitFor();
   await page.locator('[contenteditable=true]:visible').last().fill('分枝验证');await page.locator('[contenteditable=true]:visible').last().press('Enter');
   await page.getByText('上下文验证：问题 1',{exact:true}).first().waitFor({timeout:20000});
   await waitNodes(6);

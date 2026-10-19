@@ -85,7 +85,7 @@ test('pendingBranch 元数据校验、虚拟节点移动、删除父节点桥接
   assert.equal(pid,'pending:session-pending');
   const moved=editGraph(graph,{type:'move',id:pid,position:{x:120,y:260}});
   assert.deepEqual(moved.pendingBranch.position,{x:120,y:260});
-  assert.throws(()=>editGraph(graph,{type:'rename',id:pid,label:'不允许'}),/待输入节点仅支持移动/);
+  assert.equal(editGraph(graph,{type:'rename',id:pid,label:'我的分支'}).pendingBranch.label,'我的分支');
 
   const reset=editGraph(moved,{type:'reset-layout',id:'root'});
   assert.equal(reset.pendingBranch.position,undefined);

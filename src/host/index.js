@@ -37,7 +37,7 @@ export function apply(ctx) {
             case 'preview': return service.preview(input.sessionId, input.id, input.through ?? input.id, input.includeInternal === true);
             case 'activate': return service.activate(input.sessionId, input.revision, input.id, input.force === true);
             case 'branch': return service.branch(input.sessionId,input.revision,input.id);
-            case 'cancel-branch': return service.cancelBranch(input.sessionId,input.revision);
+            case 'cancel-branch': return service.cancelBranch(input.sessionId,input.revision,input.id);
             default: throw new TreeError('未知的tree-chat操作');
           }
         });

@@ -1,3 +1,6 @@
+import {draftBranchesOf,draftForNode,removeDraftBranch} from './branches.js';
+import {conversationView} from './presentation.js';
+import {arrangedPositions} from './layout.js';
 export const SCHEMA_VERSION = 1;
 export const ROOT = 'root';
 export const pendingId = graph => graph?.pendingBranch ? `pending:${graph.pendingBranch.sessionId}` : null;
@@ -46,14 +49,18 @@ export function validateGraph(graph) {
     for (const seen of visiting) complete.add(seen);
   }
   if (!graph.nodes[graph.active]) throw new TreeError('当前枝不存在');
-  const pending=graph.pendingBranch;
-  if(pending!==undefined){
+  if(graph.pendingBranch!==undefined&&(!graph.pendingBranch||typeof graph.pendingBranch!=='object'))throw new TreeError('无效的待输入分支');
+  if(graph.draftBranches!==undefined&&(!graph.draftBranches||typeof graph.draftBranches!=='object'||Array.isArray(graph.draftBranches)))throw new TreeError('无效的分支节点');
+  const drafts=draftBranchesOf(graph);
+  if(Object.keys(drafts).length+Object.keys(graph.nodes).length>20000)throw new TreeError('节点数量超过 20000');
+  for(const [sessionId,pending]of Object.entries(drafts)){
     if(!pending || typeof pending.sessionId!=='string' || !Object.hasOwn(graph.bindings,pending.sessionId) || !Object.hasOwn(graph.nodes,pending.parent) || !Number.isFinite(pending.createdAt) || typeof pending.returnSessionId!=='string' || !Object.hasOwn(graph.bindings,pending.returnSessionId))throw new TreeError('无效的待输入分支');
+    if(pending.sessionId!==sessionId || (pending.label!==undefined&&(typeof pending.label!=='string'||!pending.label.trim()||pending.label.length>200)))throw new TreeError('无效的分支节点');
     if(pending.position!==undefined&&(!pending.position || !Number.isFinite(pending.position.x) || !Number.isFinite(pending.position.y) || Math.abs(pending.position.x)>1000000 || Math.abs(pending.position.y)>1000000))throw new TreeError('无效的节点位置');
   }
   return graph;
 }
-const snapshot = graph => structuredClone({nodes: graph.nodes, active: graph.active, pendingBranch:graph.pendingBranch});
+const snapshot = graph => structuredClone({nodes: graph.nodes, active: graph.active, pendingBranch:graph.pendingBranch,draftBranches:graph.draftBranches});
 export function editGraph(original, operation) {
   const graph = structuredClone(original);
   if (operation.type === 'undo' || operation.type === 'redo') {
@@ -63,12 +70,15 @@ export function editGraph(original, operation) {
     graph[to].push(snapshot(graph));
     Object.assign(graph, prior);
     if (prior.pendingBranch === undefined) delete graph.pendingBranch;
+    if (prior.draftBranches === undefined) delete graph.draftBranches;
   } else {
-    const isPending = Boolean(operation.id && operation.id === pendingId(graph)), node = isPending ? graph.pendingBranch : Object.hasOwn(graph.nodes, operation.id) ? graph.nodes[operation.id] : undefined;
+    // Normalize the legacy alias to the same object before editing positions or labels.
+    if(graph.draftBranches&&graph.pendingBranch)graph.pendingBranch=graph.draftBranches[graph.pendingBranch.sessionId]??graph.pendingBranch;
+    const draft=draftForNode(graph,operation.id),isPending=Boolean(draft),node=draft??(Object.hasOwn(graph.nodes,operation.id)?graph.nodes[operation.id]:undefined);
     if (!node) throw new TreeError('节点不存在');
-    if (isPending && operation.type !== 'move') throw new TreeError('待输入节点仅支持移动或取消分支');
-    if (graph.pendingBranch && (operation.type === 'delete' || operation.type === 'reparent')) {
-      const pendingAncestors = new Set(pathTo(graph, graph.pendingBranch.parent, false).map(n => n.id));
+    if (isPending && !['move','rename'].includes(operation.type)) throw new TreeError('请通过节点菜单删除空分支');
+    if (operation.type === 'delete' || operation.type === 'reparent') for(const draft of Object.values(draftBranchesOf(graph))){
+      const pendingAncestors = new Set(pathTo(graph,draft.parent,false).map(n => n.id));
       if (pendingAncestors.has(operation.id)) throw new TreeError('请先完成或取消当前待输入分支，再修改其上游节点');
     }
     graph.undo.push(snapshot(graph));
@@ -81,7 +91,12 @@ export function editGraph(original, operation) {
         node.position = {x:operation.position?.x,y:operation.position?.y}; break;
       case 'reset-layout':
         for (const n of Object.values(graph.nodes)) delete n.position;
-        if(graph.pendingBranch)delete graph.pendingBranch.position;
+        for(const draft of Object.values(draftBranchesOf(graph)))delete draft.position;
+        break;
+      case 'arrange':
+        for(const [id,position]of Object.entries(arrangedPositions(conversationView(graph,operation.includeInternal===true).graph))){
+          const target=draftForNode(graph,id)??graph.nodes[id];target.position=position;
+        }
         break;
       case 'reparent':
         if (node.id === ROOT) throw new TreeError('不能修改对话起点的输入');
@@ -112,7 +127,7 @@ export function editGraph(original, operation) {
       default: throw new TreeError('未知的编辑操作');
     }
   }
-  if (graph.pendingBranch && (!Object.hasOwn(graph.nodes, graph.pendingBranch.parent) || !Object.hasOwn(graph.bindings, graph.pendingBranch.sessionId) || !Object.hasOwn(graph.bindings, graph.pendingBranch.returnSessionId) || graph.bindings[graph.pendingBranch.sessionId].head !== graph.pendingBranch.parent)) delete graph.pendingBranch;
+  for(const draft of Object.values(draftBranchesOf(graph)))if(!graph.nodes[draft.parent]||!graph.bindings[draft.sessionId]||!graph.bindings[draft.returnSessionId]||graph.bindings[draft.sessionId].head!==draft.parent)removeDraftBranch(graph,draft.sessionId);
   graph.revision++;
   return validateGraph(graph);
 }

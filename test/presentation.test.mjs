@@ -73,7 +73,7 @@ test('待输入分支投影到所属用户节点，折叠内部轮次并在转�
   const pid='pending:session-branch';
   assert.ok(collapsed.graph.nodes[pid]);
   assert.equal(collapsed.graph.nodes[pid].parent,'1','internal parent 4 projects under user owner 1');
-  assert.equal(collapsed.graph.nodes[pid].label,'输入新消息…');
+  assert.equal(collapsed.graph.nodes[pid].label,'新分支');
   assert.deepEqual(collapsed.graph.nodes[pid].position,{x:88,y:199});
   assert.equal(collapsed.owners.get(pid),pid);
   assert.equal(collapsed.targets.get(pid),'4');

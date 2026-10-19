@@ -55,12 +55,13 @@ try {
     return pr.left >= cr.left && pr.right <= cr.right;
   },pendingElement);
   const pendingMetrics=await root.locator('.st-node.st-pending').evaluate(el=>{
-    const r=el.getBoundingClientRect(), c=el.closest('.st-canvas').getBoundingClientRect(), btn=el.querySelector('button[aria-label="取消新分支"]').getBoundingClientRect();
+    const r=el.getBoundingClientRect(), c=el.closest('.st-canvas').getBoundingClientRect(), btn=el.querySelector('.st-node-controls button').getBoundingClientRect();
     return {visible:r.width>0&&r.height>0,inCanvas:r.left>=c.left&&r.right<=c.right,cancelVisible:btn.width>0&&btn.right<=r.right+1};
   });
   assert.ok(pendingMetrics.visible&&pendingMetrics.inCanvas&&pendingMetrics.cancelVisible,JSON.stringify(pendingMetrics));
+  await root.locator('.st-pending.st-current .st-node-body').click({button:'right'});
   const cancelWait=page.waitForResponse(r=>r.url().includes('/api/conversation-tree')&&r.request().postDataJSON()?.action==='cancel-branch');
-  await root.getByRole('button',{name:'取消新分支',exact:true}).click();
+  await root.getByRole('menuitem',{name:'删除空分支',exact:true}).click();
   await cancelWait;
   await page.waitForFunction(()=>{
     const r=[...document.querySelectorAll('.st-root')].find(e=>{const b=e.getBoundingClientRect();return b.width>0&&b.height>0&&getComputedStyle(e).visibility!=='hidden';});

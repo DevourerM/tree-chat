@@ -74,7 +74,7 @@ try {
   });
   assert.equal(await root.locator('.st-node.st-pending').count(), 1, 'browsing history must not cancel pending branch');
 
-  const pBox = await nodeBtn('输入新消息…').boundingBox();
+  const pBox = await nodeBtn('新分支').boundingBox();
   const movePending = waitApi('edit');
   await page.mouse.move(pBox.x + pBox.width / 2, pBox.y + pBox.height / 2);
   await page.mouse.down();
@@ -97,7 +97,7 @@ try {
   assert.equal(pendingStyleBefore.top, `${draggedPos.y}px`);
 
   // 4. Double-click pending node to switch to its session and focus composer, then send first message
-  await nodeBtn('输入新消息…').dblclick();
+  await nodeBtn('新分支').dblclick();
   await waitIdle();
   await page.locator('[contenteditable=true]:visible').last().fill('问题 2新枝首轮');
   await page.locator('[contenteditable=true]:visible').last().press('Enter');
@@ -120,9 +120,10 @@ try {
   await root.locator('.st-node.st-pending.st-current').waitFor();
   await waitIdle();
 
-  // Cancel with × button returns to the previous branch session and re-archives the cancelled draft
+  // Explicit deletion is in the normal node menu; empty nodes have no temporary × control.
+  await root.locator('.st-pending.st-current .st-node-body').click({button:'right'});
   const cancelRes = waitApi('cancel-branch');
-  await root.getByRole('button', {name: '取消新分支', exact: true}).click();
+  await root.getByRole('menuitem', {name: '删除空分支', exact: true}).click();
   const afterCancel = await (await cancelRes).json();
   assert.equal(afterCancel.graph.pendingBranch, undefined);
   assert.equal(afterCancel.sessionId, res1.sessionId);

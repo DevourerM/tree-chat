@@ -42,34 +42,8 @@ function currentHead(graph, sessionId) {
   const head = graph.bindings[sessionId]?.head;
   return graph.nodes[head] ? head : graph.active;
 }
-const draftId = graph => graph.pendingBranch ? `pending:${graph.pendingBranch.sessionId}` : null;
-const currentNode = (graph,sessionId) => graph.pendingBranch?.sessionId===sessionId ? draftId(graph) : currentHead(graph,sessionId);
-const NODE_SIZES = {s: {width: 168, height: 40, gap: 20, step: 68}, m: {width: 188, height: 44, gap: 24, step: 76}, l: {width: 200, height: 44, gap: 28, step: 80}};
-function layoutGraph(graph, size, moving) {
-  const {width, height, gap, step} = NODE_SIZES[size], column = width + gap;
-  const children = new Map();
-  for (const node of Object.values(graph.nodes)) { const list = children.get(node.parent) ?? []; list.push(node); children.set(node.parent, list); }
-  const roots = children.get(null) ?? [], order = [], stack = roots.map(n => ({node: n, depth: 0})).reverse();
-  while (stack.length) {
-    const item = stack.pop(); order.push(item);
-    for (const child of [...(children.get(item.node.id) ?? [])].reverse()) stack.push({node: child, depth: item.depth + 1});
-  }
-  const spans = new Map();
-  for (let i = order.length - 1; i >= 0; i--) spans.set(order[i].node.id, Math.max(1, (children.get(order[i].node.id) ?? []).reduce((sum, n) => sum + spans.get(n.id), 0)));
-  let cursor = 0; const positions = new Map();
-  const place = roots.map(node => { const from = cursor; cursor += spans.get(node.id); return {node, from, depth: 0}; }).reverse();
-  while (place.length) {
-    const {node, from, depth} = place.pop(); const span = spans.get(node.id);
-    const w = node.id === 'root' ? 88 : width, h = node.id === 'root' ? 30 : height;
-    const position=moving[node.id] ?? node.position;
-    const cx = position?.x ?? 24 + (from + span / 2) * column, cy = position?.y ?? 30 + depth * step;
-    positions.set(node.id, {x: cx-w/2, y: cy-h/2, cx, cy, width: w, height: h, node, depth});
-    let offset = from;
-    for (const child of children.get(node.id) ?? []) { place.push({node: child, from: offset, depth: depth + 1}); offset += spans.get(child.id); }
-  }
-  const values=[...positions.values()], left=Math.min(0,...values.map(p=>p.x-24)), top=Math.min(0,...values.map(p=>p.y-24));
-  return {positions,left,top,width:Math.max(240,...values.map(p=>p.x+p.width+24))-left,height:Math.max(120,...values.map(p=>p.y+p.height+30))-top};
-}
+const currentNode = (graph,sessionId) => draftBranchesOf(graph)[sessionId] ? `pending:${sessionId}` : currentHead(graph,sessionId);
+const nodeExists = (graph,id) => Boolean(graph.nodes[id] || draftForNode(graph,id));
 function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   const visible = useTabInfo().tab.visible;
   const cached = activeTreeCache && activeTreeCache.graph?.bindings?.[sessionId] ? activeTreeCache : null;
@@ -79,7 +53,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
     const rest = cached.graph;
     const restored = pendingSelection?.sessionId === sessionId ? pendingSelection.id : null;
     if (restored) pendingSelection = null;
-    return restored && (rest.nodes[restored] || restored === draftId(rest)) ? restored : cached.selected && (rest.nodes[cached.selected] || cached.selected === draftId(rest)) ? cached.selected : currentNode(rest, sessionId);
+    return restored && nodeExists(rest,restored) ? restored : cached.selected && nodeExists(rest,cached.selected) ? cached.selected : currentNode(rest, sessionId);
   });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -124,7 +98,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
       setGraph(old => old?.revision === next.revision ? old : next);
       const restored=pendingSelection?.sessionId===sessionId?pendingSelection.id:null;
       if(restored)pendingSelection=null;
-      setSelected(old => restored&&(next.nodes[restored]||restored===draftId(next))?restored:(next.nodes[old]||old===draftId(next)) && old !== previousHead ? old : currentNode(next, sessionId));
+      setSelected(old => restored&&nodeExists(next,restored)?restored:nodeExists(next,old) && old !== previousHead ? old : currentNode(next, sessionId));
     }
     return next;
   }, [sessionId]);
@@ -231,16 +205,16 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
     setMenu(null);
     return run(async()=>{
       const cur=graphRef.current;
-      const branchParent=id===draftId(cur)?cur.pendingBranch.parent:(presentation.targets.get(id)??id);
+      const branchParent=draftForNode(cur,id)?id:(presentation.targets.get(id)??id);
       await compose(await api({action:'branch',sessionId,revision:cur.revision,id:branchParent}));
     });
   }
-  const cancelBranch=()=>{setMenu(null);return run(async()=>compose(await api({action:'cancel-branch',sessionId,revision:graphRef.current.revision})));};
+  const cancelBranch=(id=selectedId)=>{setMenu(null);return run(async()=>compose(await api({action:'cancel-branch',sessionId,revision:graphRef.current.revision,id})));};
   async function jump(id) {
     setSelected(id);setMenu(null);setError('');
     persistCache(graph, id, view, viewTouched.current, showInternal);
     try {
-      if(id===draftId(graphRef.current)){
+      if(draftForNode(graphRef.current,id)){
         return await createBranch(id);
       }
       await navigation.open(signal=>api({action:'locate',sessionId,id},signal),target=>{
@@ -276,7 +250,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
     setGraph(updated); setMenu(null); setConfirm(null); setRename(null);
     const head = updated.bindings[sessionId]?.head;
     const target = updated.nodes[head] ? head : updated.active;
-    const nextSelected = updated.nodes[selected] || selected === draftId(updated) ? selected : target;
+    const nextSelected = nodeExists(updated,selected) ? selected : target;
     setSelected(nextSelected);
     persistCache(updated, nextSelected, view, viewTouched.current, showInternal);
     const path = ancestors(updated, target);
@@ -331,6 +305,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   }},
     h('div', {className: 'st-toolbar'}, h('label', {className: 'st-search'}, h(Icon, {name: 'search', size: 14}), h('input', {value: query, onChange: e => setQuery(e.target.value), placeholder: '搜索节点', 'aria-label': '搜索节点'})),
       h(Button,{icon:'plus',label:'新建分支',disabled:busy||!connected,onClick:()=>createBranch(),children:'新建分支'}),
+      h(Button,{icon:'arrange',label:'整理节点',disabled:busy,onClick:()=>{viewTouched.current=false;run(()=>mutate({type:'arrange',id:'root',includeInternal:showInternal}));}}),
       h('button',{type:'button',className:'st-button','aria-label':'对话树选项','aria-haspopup':'menu','aria-expanded':menu?.kind==='global',onClick:e=>openMenu(e,'global')},h(Icon,{name:'more'}))),
     error && h('div', {className: 'st-error', role: 'alert'}, h('span', null, error), h(Button, {icon: 'close', label: '关闭提示', onClick: () => setError('')})),
     dirty && h('div', {className: 'st-notice'}, '上下文待应用'),
@@ -376,14 +351,14 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
           ...[...layout.positions.values()].filter(p => p.node.parent).map(p => {
             const parent = layout.positions.get(p.node.parent), x = parent.cx, y=parent.cy+(lod?6:parent.height/2), x2=p.cx, y2=p.cy-(lod?6:p.height/2);
             const d=`M${x},${y} C${x},${y+27} ${x2},${y2-27} ${x2},${y2}`;
-            return h('path', {key:p.node.id,d,className:`st-wire${pathSet.has(p.node.id)?' st-wire-active':''}${p.node.kind==='pending'?' st-wire-pending':''}`});
+            return h('path', {key:p.node.id,d,className:`st-wire${pathSet.has(p.node.id)?' st-wire-active':''}`});
           })),
         ...[...layout.positions.values()].map(p => {
           const n=p.node, label=n.id==='root'&&n.label==='对话起点'?'起点':n.label, match=!query || n.label.toLowerCase().includes(query.toLowerCase());
-          return h('article', {key:n.id, 'data-node-id':n.id, className:`st-node${n.id==='root'?' st-origin':''}${n.kind==='pending'?' st-pending':''}${n.id===selectedId?' st-selected':''}${moving[n.id]?' st-moving':''}${pathSet.has(n.id)?' st-onpath':''}${n.id===current?' st-current':''}${n.parent===null&&n.id!=='root'?' st-detached':''}${!match?' st-dim':''}`, style:{left:p.cx,top:p.cy,'--node-w':`${p.width}px`,'--node-h':`${p.height}px`}, title:n.kind==='pending'?'新分支：在聊天输入框中发送消息':n.id==='root'?'对话起点':`${n.label}\n第 ${p.depth} 轮 · ${new Date(n.createdAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}${n.parent===null?' · 未连接':''}`, onClick:e=>handleNodeClick(e,n.id), onDoubleClick:e=>handleNodeDoubleClick(e,n.id), onContextMenu:e=>openMenu(e,n.id)},
+          return h('article', {key:n.id, 'data-node-id':n.id, className:`st-node${n.id==='root'?' st-origin':''}${n.kind==='pending'?' st-pending':''}${n.id===selectedId?' st-selected':''}${moving[n.id]?' st-moving':''}${pathSet.has(n.id)?' st-onpath':''}${n.id===current?' st-current':''}${n.parent===null&&n.id!=='root'?' st-detached':''}${!match?' st-dim':''}`, style:{left:p.cx,top:p.cy,'--node-w':`${p.width}px`,'--node-h':`${p.height}px`}, title:n.kind==='pending'?'新分支':n.id==='root'?'对话起点':`${n.label}\n第 ${p.depth} 轮 · ${new Date(n.createdAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}${n.parent===null?' · 未连接':''}`, onClick:e=>handleNodeClick(e,n.id), onDoubleClick:e=>handleNodeDoubleClick(e,n.id), onContextMenu:e=>openMenu(e,n.id)},
             h('button',{className:'st-node-body', onPointerDown:e=>beginNode(e,n.id), onClick:e=>handleNodeClick(e,n.id), onDoubleClick:e=>handleNodeDoubleClick(e,n.id), 'aria-label':n.label, 'aria-pressed':n.id===selectedId},h('span',{className:'st-node-title'},label)),
             h('div',{className:'st-node-controls'},n.kind==='pending'
-              ?h('button',{className:'st-button','aria-label':'取消新分支',title:'取消新分支',disabled:busy,onPointerDown:e=>e.stopPropagation(),onClick:e=>{e.stopPropagation();cancelBranch();}},h(Icon,{name:'close',size:14}))
+              ?h('button',{className:'st-button','aria-label':n.id===selectedId?'节点操作':`节点操作：${n.label}`,title:'节点操作',onPointerDown:e=>e.stopPropagation(),onClick:e=>openMenu(e,n.id)},h(Icon,{name:'more',size:14}))
               :h(React.Fragment,null,h('button',{className:'st-button st-node-add','aria-label':`从 ${n.label} 新建分支`,title:'从这里新建分支',disabled:busy||ancestors(graph,presentation.targets.get(n.id)??n.id)[0]!=='root',onPointerDown:e=>e.stopPropagation(),onClick:e=>{e.stopPropagation();createBranch(n.id);}},h(Icon,{name:'plus',size:14})),n.id!=='root'&&h('button',{className:'st-button st-node-more','aria-label':n.id===selectedId?'节点操作':`节点操作：${n.label}`,title:'节点操作',onPointerDown:e=>e.stopPropagation(),onClick:e=>openMenu(e,n.id)},h(Icon,{name:'more',size:14})))),
             h('span',{className:'st-node-flag','aria-hidden':true},label),
             );
@@ -399,10 +374,13 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
       menu.kind==='global'?h(React.Fragment,null,
         h('button',{role:'menuitem',disabled:busy||!graph.canUndo,onClick:()=>run(()=>mutate({type:'undo'}))},h(Icon,{name:'undo'}),'撤销',h('kbd',null,'Ctrl+Z')),
         h('button',{role:'menuitem',disabled:busy||!graph.canRedo,onClick:()=>run(()=>mutate({type:'redo'}))},h(Icon,{name:'redo'}),'重做',h('kbd',null,'Ctrl+Shift+Z')),
-        h('hr'),h('button',{role:'menuitem',disabled:busy,onClick:()=>{viewTouched.current=false;run(()=>mutate({type:'reset-layout',id:'root'}));}},h(Icon,{name:'arrange'}),'自动排列'),
+        h('hr'),h('button',{role:'menuitem',disabled:busy,onClick:()=>{viewTouched.current=false;run(()=>mutate({type:'arrange',id:'root',includeInternal:showInternal}));}},h(Icon,{name:'arrange'}),'整理节点'),
         h('button',{role:'menuitemcheckbox','aria-checked':showInternal,onClick:()=>{viewTouched.current=false;setShowInternal(!showInternal);persistCache(graph, selectedId, view, viewTouched.current, !showInternal);setMenu(null);}},h(Icon,{name:'layers'}),showInternal?'仅显示用户输入':'显示完整轮次'),
         h('button',{role:'menuitem',onClick:()=>{exportTree();setMenu(null);}},h(Icon,{name:'download'}),'导出树结构'))
-      :isDraft?h('button',{role:'menuitem',disabled:busy,onClick:cancelBranch},h(Icon,{name:'close'}),'取消新分支')
+      :isDraft?h(React.Fragment,null,
+        h('button',{role:'menuitem',disabled:busy,onClick:()=>createBranch()},h(Icon,{name:'play'}),'继续分支'),
+        h('button',{role:'menuitem',onClick:()=>{setRename(node.label);setMenu(null);}},'重命名节点'),
+        h('button',{role:'menuitem',className:'st-danger',disabled:busy,onClick:()=>cancelBranch()},h(Icon,{name:'trash'}),'删除空分支'))
       :h(React.Fragment,null,
         h('button',{role:'menuitem',disabled:busy||!connected,onClick:()=>createBranch()},h(Icon,{name:'plus'}),'新建分支'),
         leaf&&selectedId!==current&&h('button',{role:'menuitem',disabled:busy||!connected,onClick:activate},h(Icon,{name:'play'}),'继续这条分支'),

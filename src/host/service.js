@@ -2,9 +2,21 @@ import {randomUUID} from 'node:crypto';
 import {Session} from '@deepseek-ai/dsh-session';
 import {newGraph, ROOT, pathKey, pathTo, editGraph, publicGraph, assertRevision, TreeError} from '../core/graph.js';
 import {turnsOf, compilePath, textOf, updateNodePresentation, messageLocation} from './context.js';
+import {draftBranchesOf,draftForNode,setDraftBranch,removeDraftBranch} from '../core/branches.js';
+import {conversationView} from '../core/presentation.js';
+import {layoutGraph,nextNodePosition} from '../core/layout.js';
 
 export class TreeService {
   constructor(ctx, storage) { this.ctx = ctx; this.storage = storage; this.loaded = new Map(); }
+  newPosition(graph,parentId) {
+    const projected=conversationView(graph),layout=layoutGraph(projected.graph);
+    // Keep existing nodes fixed when a new child changes the automatic tree spans.
+    for(const [id,p]of layout.positions){
+      const node=draftForNode(graph,id)??graph.nodes[id];
+      if(!node.position)node.position={x:p.cx,y:p.cy};
+    }
+    return nextNodePosition(conversationView(graph).graph,projected.owners.get(parentId)??parentId);
+  }
   async shelve(graph, selectedSessionId) {
     const registry = this.ctx.get('workspaceRegistry');
     if (!registry?.archiveSession || !registry?.unarchiveSession) return;
@@ -85,17 +97,21 @@ export class TreeService {
     const source = sourceInput ?? await this.load(sessionId);
     const newTurns = source.turns.filter(t => t.end > binding.seen);
     if (!newTurns.length) return false;
-    const pending = graph.pendingBranch?.sessionId === sessionId ? graph.pendingBranch : null;
+    const pending = draftBranchesOf(graph)[sessionId];
+    if(pending&&graph.pendingBranch?.sessionId===sessionId)graph.pendingBranch=pending;
     let promoted = false;
     for (const turn of newTurns) {
-      const id = `${sessionId}:${turn.end}`;
+      const promote=pending&&!promoted&&turn.kind==='user';
+      const id = promote ? `pending:${sessionId}` : `${sessionId}:${turn.end}`;
       // A deleted historical node must never be resurrected by a polling read.
       if (!graph.nodes[id]) {
         const parent = graph.nodes[binding.head] ? binding.head : graph.active;
+        const position=turn.kind==='user'?(pending&&!promoted&&pending.position?pending.position:this.newPosition(graph,parent)):undefined;
         graph.nodes[id] = {id, parent, label: turn.label, kind: turn.kind, labelMode: 'auto', createdAt: turn.createdAt,
-          source: {sessionId, start: turn.start, end: turn.end}};
+          source: {sessionId, start: turn.start, end: turn.end},...(position?{position}:{})};
         if (pending && !promoted && turn.kind === 'user') {
           if (pending.position) graph.nodes[id].position = pending.position;
+          if(pending.labelMode==='custom'){graph.nodes[id].label=pending.label;graph.nodes[id].labelMode='custom';}
           promoted = true;
         }
       }
@@ -105,7 +121,7 @@ export class TreeService {
       binding.key = pathKey(graph, id);
     }
     if (pending) {
-      if (promoted) delete graph.pendingBranch;
+      if (promoted) removeDraftBranch(graph,sessionId);
       else pending.parent = binding.head;
     }
     return true;
@@ -129,12 +145,11 @@ export class TreeService {
     }
     const presentationChanged = await this.refreshPresentation(graph, source, sessionId);
     let changed = await this.syncSessionTurns(graph, sessionId, source, true);
-    if (graph.pendingBranch && graph.pendingBranch.sessionId !== sessionId) {
-      changed = (await this.syncSessionTurns(graph, graph.pendingBranch.sessionId, undefined, false)) || changed;
-    }
-    if (graph.pendingBranch && (!graph.nodes[graph.pendingBranch.parent] || !graph.bindings[graph.pendingBranch.sessionId] || !graph.bindings[graph.pendingBranch.returnSessionId] || graph.bindings[graph.pendingBranch.sessionId].head !== graph.pendingBranch.parent)) {
-      delete graph.pendingBranch;
-      changed = true;
+    for(const draft of Object.values(draftBranchesOf(graph))) {
+      if(draft.sessionId!==sessionId)changed=(await this.syncSessionTurns(graph,draft.sessionId,undefined,false))||changed;
+      if(!graph.nodes[draft.parent]||!graph.bindings[draft.sessionId]||!graph.bindings[draft.returnSessionId]||(!graph.nodes[`pending:${draft.sessionId}`]&&graph.bindings[draft.sessionId].head!==draft.parent)){
+        removeDraftBranch(graph,draft.sessionId);changed=true;
+      }
     }
     if (changed) { graph.revision++; graph.undo = []; graph.redo = []; }
     else if (presentationChanged || titleChanged) graph.revision++;
@@ -167,7 +182,7 @@ export class TreeService {
   async edit(sessionId, revision, operation) {
     const graph = await this.sync(sessionId);
     assertRevision(graph, revision);
-    if (!['move','reset-layout','rename'].includes(operation.type) && Object.keys(graph.bindings).some(id => this.ctx.agents.get(id)?.status === 'running')) throw new TreeError('请等待这棵树中的对话完成后再调整上下文', 409);
+    if (!['move','reset-layout','arrange','rename'].includes(operation.type) && Object.keys(graph.bindings).some(id => this.ctx.agents.get(id)?.status === 'running')) throw new TreeError('请等待这棵树中的对话完成后再调整上下文', 409);
     const updated = editGraph(graph, operation);
     await this.storage.save(updated);
     return publicGraph(updated);
@@ -229,30 +244,36 @@ export class TreeService {
   }
   async branch(sessionId,revision,id){
     let graph=await this.sync(sessionId);assertRevision(graph,revision);
+    const empty=draftForNode(graph,id);
+    if(empty){setDraftBranch(graph,empty);await this.shelve(graph,empty.sessionId);return {sessionId:empty.sessionId,graph:publicGraph(graph)};}
     if(!Object.hasOwn(graph.nodes,id))throw new TreeError('节点不存在');
     if(Object.keys(graph.bindings).some(s=>this.ctx.agents.get(s)?.status==='running'))throw new TreeError('请等待当前生成结束后再新建分支',409);
-    if(graph.pendingBranch){
-      if(graph.pendingBranch.parent===id && graph.bindings[graph.pendingBranch.sessionId]?.key===pathKey(graph,id)){
-        await this.shelve(graph,graph.pendingBranch.sessionId);
-        return {sessionId:graph.pendingBranch.sessionId,graph:publicGraph(graph)};
+    for(const draft of Object.values(draftBranchesOf(graph))){
+      if(draft.parent===id && graph.bindings[draft.sessionId]?.key===pathKey(graph,id)){
+        setDraftBranch(graph,draft);await this.shelve(graph,draft.sessionId);
+        return {sessionId:draft.sessionId,graph:publicGraph(graph)};
       }
     }
-    const returnSessionId = sessionId === graph.pendingBranch?.sessionId && graph.bindings[graph.pendingBranch.returnSessionId] ? graph.pendingBranch.returnSessionId : sessionId;
+    const currentDraft=draftBranchesOf(graph)[sessionId];
+    const returnSessionId = currentDraft&&graph.bindings[currentDraft.returnSessionId]?currentDraft.returnSessionId:sessionId;
+    const position=this.newPosition(graph,id);
+    await this.storage.save(graph);
     const result=await this.activate(sessionId,graph.revision,id,true);
     graph=await this.storage.find(result.sessionId);
-    graph.pendingBranch={sessionId:result.sessionId,parent:id,createdAt:Date.now(),returnSessionId};
+    setDraftBranch(graph,{sessionId:result.sessionId,parent:id,createdAt:Date.now(),returnSessionId,position});
     graph.undo=[];graph.redo=[];graph.revision++;
     await this.storage.save(graph);
     return {sessionId:result.sessionId,graph:publicGraph(graph)};
   }
-  async cancelBranch(sessionId,revision){
+  async cancelBranch(sessionId,revision,id){
     let graph=await this.sync(sessionId);assertRevision(graph,revision);
-    if(!graph.pendingBranch)throw new TreeError('该分支已产生消息，请使用节点菜单管理');
+    const draft=id?draftForNode(graph,id):draftBranchesOf(graph)[sessionId]??graph.pendingBranch;
+    if(!draft)throw new TreeError('该分支已产生消息，请使用节点菜单管理');
     if(Object.keys(graph.bindings).some(s=>this.ctx.agents.get(s)?.status==='running'))throw new TreeError('请等待当前生成结束',409);
     let target=sessionId;
-    if(target===graph.pendingBranch.sessionId)target=graph.pendingBranch.returnSessionId;
+    if(target===draft.sessionId)target=draft.returnSessionId;
     if(!graph.bindings[target] || !graph.nodes[graph.bindings[target]?.head])target=graph.id;
-    delete graph.pendingBranch;graph.undo=[];graph.redo=[];graph.revision++;
+    removeDraftBranch(graph,draft.sessionId);graph.undo=[];graph.redo=[];graph.revision++;
     graph.active=graph.nodes[graph.bindings[target]?.head]?.id??ROOT;
     await this.shelve(graph,target);await this.storage.save(graph);
     return {sessionId:target,graph:publicGraph(graph)};

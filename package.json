@@ -1,6 +1,6 @@
 {
   "name": "tree-chat",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "DSH conversation branches and context editing",
   "type": "module",
   "license": "MIT",

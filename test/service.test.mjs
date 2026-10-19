@@ -6,6 +6,7 @@ import {join, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {TreeStorage} from '../src/host/storage.js';
 import {conversationView} from '../src/core/presentation.js';
+import {layoutGraph} from '../src/core/layout.js';
 import {fixture} from './fixtures.mjs';
 import {pluginRoot, resolveDshRuntime} from '../scripts/_env.mjs';
 
@@ -21,14 +22,11 @@ try {
 
 async function loadHostModules() {
   const sessionUrl = pathToFileURL(resolve(runtimeDir, '@deepseek-ai/dsh-session/lib/index.js')).href;
-  const graphUrl = pathToFileURL(resolve(pluginRoot, 'src/core/graph.js')).href;
-  const contextUrl = pathToFileURL(resolve(pluginRoot, 'src/host/context.js')).href;
   const serviceUrl = pathToFileURL(resolve(pluginRoot, 'src/host/service.js')).href;
   const {Session, KNOWN_SESSION_EVENT_TYPES} = await import(sessionUrl);
   const source = (await readFile(resolve(pluginRoot, 'src/host/service.js'), 'utf8'))
     .replace("from '@deepseek-ai/dsh-session'", `from ${JSON.stringify(sessionUrl)}`)
-    .replace("from '../core/graph.js'", `from ${JSON.stringify(graphUrl)}`)
-    .replace("from './context.js'", `from ${JSON.stringify(contextUrl)}`) + `\n//# sourceURL=${serviceUrl}\n`;
+    .replace(/from '(\.[^']+)'/g,(_,relative)=>`from ${JSON.stringify(new URL(relative,serviceUrl).href)}`) + `\n//# sourceURL=${serviceUrl}\n`;
   const mod = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`);
   return {Session, KNOWN_SESSION_EVENT_TYPES, TreeService: mod.TreeService};
 }
@@ -131,6 +129,36 @@ function createMockHost(Session, initialTurns = 3) {
 
   return {ctx, liveSessions, archived, pinned, agents, appendUserTurn};
 }
+
+test('TreeService: 多个空分枝持久保留；避让手动节点；完成后原 ID 原位填充，只删除指定空枝', {skip: !runtimeDir && '未配置 DSH_DEV_RUNTIME，跳过宿主服务集成测试'}, async()=>{
+  const {Session,TreeService}=await loadHostModules();
+  await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
+  const storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','service-empty-'))),host=createMockHost(Session,3);
+  let service=new TreeService(host.ctx,storage),graph=await service.get('session-root');
+  const ids=Object.values(graph.nodes).filter(n=>n.source).map(n=>n.id),parent=graph.nodes[ids[0]].position;
+  graph=await service.edit('session-root',graph.revision,{type:'move',id:ids[2],position:{x:parent.x,y:parent.y+80}});
+  const first=await service.branch('session-root',graph.revision,ids[0]),firstId=`pending:${first.sessionId}`;
+  assert.notDeepEqual(first.graph.pendingBranch.position,graph.nodes[ids[2]].position);
+  const originalPosition=first.graph.pendingBranch.position;
+  const second=await service.branch(first.sessionId,first.graph.revision,ids[1]),secondId=`pending:${second.sessionId}`;
+  assert.equal(Object.keys(second.graph.draftBranches).length,2);
+  service=new TreeService(host.ctx,new TreeStorage(storage.directory));
+  graph=await service.get(second.sessionId);
+  assert.ok(conversationView(graph).graph.nodes[firstId]);assert.ok(conversationView(graph).graph.nodes[secondId]);
+  const arranged=await service.edit(second.sessionId,graph.revision,{type:'arrange',id:'root'});
+  const preserved=arranged.draftBranches[first.sessionId].position;
+  const returned=await service.branch(second.sessionId,arranged.revision,firstId);
+  assert.equal(returned.sessionId,first.sessionId);
+  host.appendUserTurn(first.sessionId,'完成第一条分支');
+  graph=await service.get(second.sessionId);
+  assert.equal(graph.nodes[firstId].label,'完成第一条分支');
+  assert.deepEqual(graph.nodes[firstId].position,preserved);
+  assert.ok(graph.draftBranches[second.sessionId]);assert.equal(graph.draftBranches[first.sessionId],undefined);
+  const positions=layoutGraph(conversationView(graph).graph).positions;
+  assert.notDeepEqual(positions.get(firstId),positions.get(secondId));assert.ok(originalPosition);
+  const deleted=await service.cancelBranch(second.sessionId,graph.revision,secondId);
+  assert.equal(Object.keys(deleted.graph.draftBranches).length,0);assert.ok(deleted.graph.nodes[firstId]);
+});
 
 test('TreeService: 新宿主工作目录变更在派生 Session 中生效，历史节点不继承未来目录', {skip: !runtimeDir && '未配置 DSH_DEV_RUNTIME，跳过宿主服务集成测试'}, async t => {
   const {Session, KNOWN_SESSION_EVENT_TYPES, TreeService} = await loadHostModules();

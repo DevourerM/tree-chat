@@ -52,6 +52,16 @@ if(args.includes('--uninstall')){
   if(!manifest.dsh.profile.bundles.includes(NAME))manifest.dsh.profile.bundles.push(NAME);
   console.log(JSON.stringify({plugin:NAME,version:build.version,dshVersion:runtime.version,profile,target,bundle:NAME,source},null,2));
   if(!args.includes('--check')){
+    if(args.includes('--no-backup')){
+      try{if((await lstat(target)).isSymbolicLink())throw new Error('已有插件目录是链接，请用 DSH 插件管理器更新。');}catch(e){if(e.code!=='ENOENT')throw e;}
+      await mkdir(target,{recursive:true});
+      for(const file of ['lib','assets','locale','package.json','cordis.patch.yml','README.md','LICENSE'])await cp(join(source,file),join(target,file),{recursive:true});
+      await atomic(manifestPath,JSON.stringify(manifest,null,2)+'\n');
+      const {backup,...previous}=state;
+      await atomic(statePath,JSON.stringify({...previous,spec,version:build.version,installedAt:new Date().toISOString(),clientHash:createHash('sha256').update(await readFile(join(target,'lib/client.js'))).digest('hex')},null,2)+'\n');
+      console.log('已直接更新 tree-chat，未创建额外备份。重启 DSH 生效。');
+      process.exit(0);
+    }
     const stamp=Date.now(),backup=join(stateDir,'backups',String(stamp));await mkdir(backup,{recursive:true});
     await writeFile(join(backup,'package.json'),original);
     const stage=join(modules,`.tree-stage-${randomUUID()}`);assertInside(modules,stage);await mkdir(stage,{recursive:true});

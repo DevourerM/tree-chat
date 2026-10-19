@@ -14,7 +14,7 @@ for(let offset=0;offset+512<=tar.length;){
   const size=parseInt(header.subarray(124,136).toString().replace(/\0.*$/s,'').trim(),8)||0;
   files.set(name,tar.subarray(offset+512,offset+512+size));offset+=512+Math.ceil(size/512)*512;
 }
-for(const name of ['package.json','lib/index.js','lib/client.js','lib/host/index.js','lib/core/graph.js','lib/core/presentation.js','cordis.patch.yml','assets/tree.svg','locale/en.json','locale/zh.json','README.md','LICENSE'])assert.ok(files.has('package/'+name),`缺少 ${name}`);
+for(const name of ['package.json','lib/index.js','lib/client.js','lib/host/index.js','lib/core/graph.js','lib/core/presentation.js','lib/core/branches.js','lib/core/layout.js','cordis.patch.yml','assets/tree.svg','locale/en.json','locale/zh.json','README.md','LICENSE'])assert.ok(files.has('package/'+name),`缺少 ${name}`);
 const manifest=JSON.parse(files.get('package/package.json'));
 assert.equal(manifest.dsh.bundle.patch,'./cordis.patch.yml');assert.equal(manifest.exports['./client'],'./lib/client.js');
 assert.equal(manifest.exports['./locale/*.json'],'./locale/*.json');

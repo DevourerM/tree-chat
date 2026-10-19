@@ -18,3 +18,10 @@ const legacy={...original,dependencies:{...original.dependencies,'dsh-conversati
 await writeFile(file,JSON.stringify(legacy));run([]);const migrated=JSON.parse(await readFile(file,'utf8'));
 assert.ok(migrated.dsh.profile.bundles.includes('tree-chat'));assert.ok(!migrated.dsh.profile.bundles.includes('dsh-conversation-tree'));assert.equal(migrated.dependencies['dsh-conversation-tree'],undefined);
 assert.equal(migrated.dependencies['keep-this'],'1.2.3');console.log('PASS: old package renamed without duplicate activation or unrelated changes.');
+const direct=await mkdtemp(resolve('artifacts/install-direct-')),directProfile=join(direct,'profiles/desktop');
+await mkdir(directProfile,{recursive:true});await writeFile(join(directProfile,'package.json'),JSON.stringify(original));
+for(let i=0;i<2;i++)execFileSync(process.execPath,['scripts/install.mjs','--home',direct,'--no-backup'],{encoding:'utf8'});
+await assert.rejects(stat(join(directProfile,'.tree-chat-install/backups')),e=>e.code==='ENOENT');
+const directState=JSON.parse(await readFile(join(directProfile,'.tree-chat-install/state.json'),'utf8'));
+assert.equal(directState.backup,undefined);assert.equal(JSON.parse(await readFile(join(directProfile,'package.json'),'utf8')).dependencies['keep-this'],'1.2.3');
+console.log('PASS: repeated direct updates create no backups and preserve unrelated profile dependencies.');

@@ -176,9 +176,6 @@ no duplicate panel heading. */
   stroke:var(--st-accent);
   stroke-width:1.75
 }
-.st-root .st-wire-pending {
-  stroke-dasharray:4 4
-}
 .st-root .st-node {
   width:var(--node-w);
   height:var(--node-h);
@@ -220,12 +217,6 @@ no duplicate panel heading. */
 }
 .st-root .st-detached {
   border-style:dashed
-}
-.st-root .st-node.st-pending {
-  border-style:dashed;
-  border-color:var(--st-accent);
-  color:var(--st-accent);
-  background:color-mix(in srgb,var(--st-accent) 6%,var(--st-card))
 }
 .st-root .st-node-body {
   display:flex;
