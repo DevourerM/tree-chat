@@ -5,6 +5,7 @@ import {conversationView} from '../src/core/presentation.js';
 import {turnsOf,compilePath} from '../src/host/context.js';
 import {getShiftSelectionPath,validateGroupCandidate} from '../src/core/groups.js';
 import {fixture,automationFixture} from './fixtures.mjs';
+import {layoutGraph,arrangedPositions} from '../src/core/layout.js';
 
 function chain(count=6,data=fixture(count,false)){
   const graph=newGraph(data.header.id);let parent='root';
@@ -16,6 +17,7 @@ function chain(count=6,data=fixture(count,false)){
 const create=(g,ids,name='集合')=>editGraph(g,{type:'group-create',ids,name});
 const firstGroup=g=>Object.values(g.groups)[0];
 function validView(graph){const view=conversationView(graph).graph;for(const n of Object.values(view.nodes)){assert.notEqual(n.parent,n.id);if(n.parent!==null)assert.ok(view.nodes[n.parent]);}return view;}
+const content=nodes=>Object.fromEntries(Object.entries(nodes).map(([id,{position,...n}])=>[id,n]));
 test('集合只接受连通节点，拒绝起点、跨过中间节点、空分支和重叠；Shift 支持共同祖先路径',()=>{
   const {graph}=chain();assert.throws(()=>create(graph,['1','3']),/不连通|入口/);
   assert.throws(()=>create(graph,['root','1']),/root|起点/);
@@ -29,7 +31,7 @@ test('集合只接受连通节点，拒绝起点、跨过中间节点、空分�
 test('折叠、展开、重命名、取消与拆分均保留原节点和模型上下文；展开不占撤销历史',async()=>{
   const {graph,data}=chain(),originalNodes=structuredClone(graph.nodes);
   let g=create(graph,['1','2','3','4'],'研究过程'),id=firstGroup(g).id;
-  assert.deepEqual(g.nodes,originalNodes);assert.equal(Object.keys(validView(g).nodes).length,4);
+  assert.deepEqual(content(g.nodes),content(originalNodes));assert.equal(Object.keys(validView(g).nodes).length,4);
   const compile=await compilePath(g,'6',async()=>data);
   assert.deepEqual(compile.seed.filter(e=>e.type==='user/message').map(e=>e.data.content[0].text),['问题 1','问题 2','问题 3','问题 4','问题 5','问题 6']);
   const undoCount=g.undo.length;g=editGraph(g,{type:'group-toggle',id,collapsed:false});assert.equal(g.undo.length,undoCount);
@@ -37,9 +39,9 @@ test('折叠、展开、重命名、取消与拆分均保留原节点和模型�
   g=editGraph(g,{type:'rename',id,label:'新名称'});assert.equal(g.groups[id].name,'新名称');
   g=editGraph(g,{type:'group-split',id,cutId:'3',name:'后半段'});
   assert.equal(Object.keys(g.groups).length,2);assert.equal(firstGroup(g).nodeIds.length,2);
-  assert.deepEqual(g.nodes,originalNodes);assert.equal(pathKey(g,'6'),pathKey(graph,'6'));
+  assert.deepEqual(content(g.nodes),content(originalNodes));assert.equal(pathKey(g,'6'),pathKey(graph,'6'));
   const undone=editGraph(g,{type:'undo'});assert.equal(Object.keys(undone.groups).length,1);
-  g=editGraph(undone,{type:'group-dissolve',id});assert.equal(Object.keys(g.groups).length,0);assert.deepEqual(g.nodes,originalNodes);
+  g=editGraph(undone,{type:'group-dissolve',id});assert.equal(Object.keys(g.groups).length,0);assert.deepEqual(content(g.nodes),content(originalNodes));
 });
 test('Y 型集合保留多个出口，删除入口自动修复为连通集合并可撤销；孤立单节点释放',()=>{
   const {graph}=chain(5);graph.nodes['4'].parent='1';

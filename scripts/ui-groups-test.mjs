@@ -29,7 +29,8 @@ try{
   await root.getByRole('button',{name:'合并为集合',exact:true}).click();
   await root.getByRole('textbox',{name:'集合名称',exact:true}).fill('调研过程');
   let graph=await edit(()=>root.getByRole('button',{name:'合并',exact:true}).click());
-  const raw=structuredClone(graph.nodes);assert.equal(Object.keys(graph.groups).length,1);assert.equal(await root.locator('.st-group').count(),1);
+  const content=nodes=>Object.fromEntries(Object.entries(nodes).map(([id,{position,...n}])=>[id,n]));
+  const raw=content(graph.nodes);assert.equal(Object.keys(graph.groups).length,1);assert.equal(await root.locator('.st-group').count(),1);
   assert.equal(await root.locator('.st-node').count(),4);
   await edit(()=>root.getByRole('button',{name:'展开集合：调研过程',exact:true}).click());
   assert.equal(await root.locator('.st-group-tag').count(),6);
@@ -39,7 +40,7 @@ try{
   await root.getByRole('textbox',{name:'搜索节点',exact:true}).fill('');await node('调研过程').waitFor();
   graph=await split('调研过程','问题 3','深入讨论');assert.equal(Object.keys(graph.groups).length,2);
   graph=await split('深入讨论','问题 5','阶段结论');assert.equal(Object.keys(graph.groups).length,3);
-  assert.deepEqual(graph.nodes,raw,'group operations preserve raw nodes');
+  assert.deepEqual(content(graph.nodes),raw,'group operations preserve raw context nodes');
   await menu('阶段结论');await root.getByRole('menuitem',{name:'重命名集合',exact:true}).click();
   await root.getByRole('textbox',{name:'集合名称',exact:true}).fill('结论');
   await edit(()=>root.getByRole('button',{name:'保存',exact:true}).click());

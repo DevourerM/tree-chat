@@ -215,7 +215,7 @@ export class TreeService {
   async edit(sessionId, revision, operation) {
     const graph = await this.sync(sessionId);
     assertRevision(graph, revision);
-    if (!['move','reset-layout','arrange','rename'].includes(operation.type) && !operation.type?.startsWith('group-') && Object.keys(graph.bindings).some(id => this.ctx.agents.get(id)?.status === 'running')) throw new TreeError('请等待这棵树中的对话完成后再调整上下文', 409);
+    if (!['move','reset-layout','arrange','rename'].includes(operation.type) && (!operation.type?.startsWith('group-')||operation.type==='group-delete') && Object.keys(graph.bindings).some(id => this.ctx.agents.get(id)?.status === 'running')) throw new TreeError('请等待这棵树中的对话完成后再调整上下文', 409);
     const updated = editGraph(graph, operation);
     await this.storage.save(updated);
     return publicGraph(updated);

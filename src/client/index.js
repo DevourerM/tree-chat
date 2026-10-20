@@ -18,6 +18,9 @@ const icons = {
   play: 'm8 4 12 8-12 8z', search: 'M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16m6-2 6 6',
   download: 'M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4',
   layers: 'm12 3 10 5-10 5L2 8zm-9 9 9 5 9-5m-18 5 9 5 9-5',
+  select: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M8 7l9 4-4 2-2 4z',
+  expandAll: 'm7 8 5-5 5 5M12 3v7m-5 6 5 5 5-5m-5 5v-7M3 12h18',
+  collapseAll: 'm7 3 5 5 5-5M12 8V1m-5 20 5-5 5 5m-5-5v7M3 12h18',
   arrange: 'M12 3v6M5 9h14M5 9v5m14-5v5M2 14h6v6H2zm14 0h6v6h-6z',
 };
 function Icon({name, size = 16}) {
@@ -59,6 +62,8 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedIds,setSelectedIds]=useState([]),[groupDialog,setGroupDialog]=useState(null);
+  const [boxSelect,setBoxSelect]=useState(true),[selectionBox,setSelectionBox]=useState(null);
+  const marquee=useRef(null),spaceHeld=useRef(false);
   const selectionAnchor=useRef(null);
   const [menu, setMenu] = useState(null);
   const [rename, setRename] = useState(null);
@@ -113,7 +118,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
     const abort = new AbortController(); let timer;
     const tick = async () => {
       try {
-        if (!busyRef.current && !nodeDrag.current && document.visibilityState !== 'hidden') {
+        if (!busyRef.current && !nodeDrag.current && !marquee.current && !drag.current && document.visibilityState !== 'hidden') {
           await refresh(abort.signal);
           setError('');
         }
@@ -263,8 +268,8 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
       setSelectedIds(path);setSelected(id);setMenu(null);setError('');return;
     }
     if(event.ctrlKey||event.metaKey){
-      setSelectedIds(old=>{const prior=old.length>1?old:[selectedId].filter(Boolean);return prior.includes(id)?prior.filter(n=>n!==id):[...prior,id];});
-      selectionAnchor.current=id;setSelected(id);setMenu(null);setError('');return;
+      const prior=selectedIds.length?selectedIds:[selectedId].filter(Boolean),next=prior.includes(id)?prior.filter(n=>n!==id):[...prior,id];
+      setSelectedIds(next);selectionAnchor.current=id;setSelected(next.includes(id)?id:next.at(-1)??null);setMenu(null);setError('');return;
     }
     selectNode(id);
   }
@@ -280,13 +285,22 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   }
   async function mutate(operation) {
     const previous=graphRef.current, previousPath=ancestors(previous,currentHead(previous,sessionId)).join('/');
-    const updated = await api({action: 'edit', sessionId, revision: graphRef.current.revision, operation});
+    const updated = await api({action: 'edit', sessionId, revision: graphRef.current.revision, operation:{includeInternal:showInternal,...operation}});
     graphRef.current=updated;
     setGraph(updated); setMenu(null); setConfirm(null); setRename(null);
     const head = updated.bindings[sessionId]?.head;
     const target = updated.nodes[head] ? head : updated.active;
     const nextSelected = nodeExists(updated,selected) ? selected : target;
     setSelected(nextSelected);
+    if(['group-create','group-toggle','group-toggle-all','group-split','group-dissolve','group-delete'].includes(operation.type)){
+      // Keep the acted-on card under the pointer while its surrounding tree compacts or expands.
+      const before=layout?.positions.get(operation.id??selectedId);
+      const projected=conversationView(updated,showInternal),nextLayout=layoutGraph(projected.graph,size);
+      const nextId=updated.groups?.[operation.id]?.collapsed?operation.id:updated.groups?.[operation.id]?.entryId??projected.owners.get(nextSelected)??nextSelected;
+      const after=nextLayout.positions.get(nextId);
+      viewTouched.current=true;
+      if(before&&after)setView(v=>({...v,x:v.x+(before.cx-after.cx)*v.zoom,y:v.y+(before.cy-after.cy)*v.zoom}));
+    }
     persistCache(updated, nextSelected, view, viewTouched.current, showInternal);
     const path = ancestors(updated, target);
     if (path[0] === 'root' && path.join('/') !== previousPath && path.join('/') !== updated.bindings[sessionId]?.key) {
@@ -299,9 +313,16 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
     return updated;
   }
   function toggleGroup(id,collapsed){
-    setMenu(null);return run(async()=>{
+    setMenu(null);setQuery('');return run(async()=>{
       const updated=await mutate({type:'group-toggle',id,collapsed});
       setSelected(updated.groups[id].collapsed?id:updated.groups[id].entryId);setSelectedIds([]);
+    });
+  }
+  function toggleAllGroups(){
+    setQuery('');setSelectedIds([]);return run(async()=>{
+      const collapsed=!Object.values(graphRef.current.groups??{}).some(g=>g.collapsed);
+      const updated=await mutate({type:'group-toggle-all',collapsed});
+      const projected=conversationView(updated,showInternal);setSelected(projected.owners.get(selectedId)??updated.groups?.[selectedId]?.entryId??selectedId);
     });
   }
   function openGroupDialog(value){setMenu(null);setGroupDialog(value);}
@@ -318,6 +339,11 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
     event.stopPropagation();event.preventDefault();event.currentTarget.focus();event.currentTarget.setPointerCapture(event.pointerId);
     const p=layout.positions.get(id);setSelected(id);setSelectedIds([id]);selectionAnchor.current=id;
     nodeDrag.current={id,pointerId:event.pointerId,x:event.clientX,y:event.clientY,position:{x:p.cx,y:p.cy},zoom:view.zoom,moved:false};
+  }
+  function canvasPoint(event){const r=viewport.current.getBoundingClientRect();return {x:(event.clientX-r.left-view.x)/view.zoom,y:(event.clientY-r.top-view.y)/view.zoom};}
+  function finishMarquee(cancel=false){
+    const m=marquee.current;marquee.current=null;setSelectionBox(null);
+    if(cancel&&m){setSelectedIds(m.originalIds);setSelected(m.originalSelected);}
   }
   async function savePosition(id,position) {
     await run(async()=>{
@@ -349,19 +375,23 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   const leaf = node && !isDraft && !hasRealChild;
   const dirty = activePath.join('/') !== graph.bindings[sessionId]?.key;
   const lod = view.zoom < .6;
-  return h('section', {className: 'st-root', ref: panel, 'data-size': size, 'aria-label': 'tree-chat 对话管理', 'aria-busy': busy, onPointerDown:e=>{if(menu&&!e.target.closest('.st-node-menu'))setMenu(null);}, onKeyDown: e => {
+  const hasGroups=Object.keys(graph.groups??{}).length>0,hasCollapsed=Object.values(graph.groups??{}).some(g=>g.collapsed);
+  return h('section', {className: 'st-root', ref: panel, 'data-size': size, 'aria-label': 'tree-chat 对话管理', 'aria-busy': busy, onPointerDown:e=>{if(menu&&!e.target.closest('.st-node-menu'))setMenu(null);},onKeyUp:e=>{if(e.code==='Space')spaceHeld.current=false;},onBlur:e=>{if(!e.currentTarget.contains(e.relatedTarget))spaceHeld.current=false;}, onKeyDown: e => {
     if (e.target.matches('input,textarea,select,[contenteditable=true]')&&e.key!=='Escape') return;
-    if (e.key === 'Escape') {if(nodeDrag.current)ignoreClick.current={id:nodeDrag.current.id,until:Date.now()+400};nodeDrag.current=null;setMoving({});setConfirm(null);setRename(null);setGroupDialog(null);setMenu(null);navigation.cancel();}
+    if(e.code==='Space'&&e.target.matches('.st-canvas,.st-node-body')){e.preventDefault();spaceHeld.current=true;}
+    if (e.key === 'Escape') {if(nodeDrag.current)ignoreClick.current={id:nodeDrag.current.id,until:Date.now()+400};nodeDrag.current=null;finishMarquee(true);drag.current=null;setMoving({});setConfirm(null);setRename(null);setGroupDialog(null);setMenu(null);navigation.cancel();}
     if ((e.ctrlKey || e.metaKey) && ['z','y'].includes(e.key.toLowerCase())) {e.preventDefault();run(() => mutate({type:e.shiftKey||e.key.toLowerCase()==='y'?'redo':'undo'}));}
   }},
     h('div', {className: 'st-toolbar'}, h('label', {className: 'st-search'}, h(Icon, {name: 'search', size: 14}), h('input', {value: query, onChange: e => setQuery(e.target.value), placeholder: '搜索节点', 'aria-label': '搜索节点'})),
       h(Button,{icon:'plus',label:'新建分支',disabled:busy||!connected||isGroup,onClick:()=>createBranch(),children:'新建分支'}),
       h(Button,{icon:'layers',label:'合并为集合',disabled:busy||!groupCandidate.ok||selectedIds.some(id=>presentation.graph.nodes[id]?.kind==='pending'),onClick:()=>openGroupDialog({type:'create',ids:selectedIds,includeInternal:showInternal})}),
+      h(Button,{icon:'select',label:'框选节点',pressed:boxSelect,onClick:()=>setBoxSelect(!boxSelect)}),
+      h(Button,{icon:hasCollapsed?'expandAll':'collapseAll',label:hasCollapsed?'展开所有集合':'折叠所有集合',disabled:busy||!hasGroups,onClick:toggleAllGroups}),
       h(Button,{icon:'arrange',label:'整理节点',disabled:busy,onClick:()=>{viewTouched.current=false;run(()=>mutate({type:'arrange',id:'root',includeInternal:showInternal}));}}),
       h('button',{type:'button',className:'st-button','aria-label':'对话树选项','aria-haspopup':'menu','aria-expanded':menu?.kind==='global',onClick:e=>openMenu(e,'global')},h(Icon,{name:'more'}))),
     error && h('div', {className: 'st-error', role: 'alert'}, h('span', null, error), h(Button, {icon: 'close', label: '关闭提示', onClick: () => setError('')})),
     dirty && h('div', {className: 'st-notice'}, '上下文待应用'),
-    h('div', {className: `st-canvas${lod?' st-lod':''}${Object.keys(moving).length?' st-node-dragging':''}`, ref: viewport, tabIndex: 0, 'aria-label': '对话树画布，可拖动节点或空白处平移，滚轮缩放', style:{'--st-zoom':view.zoom,backgroundSize:`${24*view.zoom}px ${24*view.zoom}px`,backgroundPosition:`${view.x}px ${view.y}px`},
+    h('div', {className: `st-canvas${lod?' st-lod':''}${Object.keys(moving).length?' st-node-dragging':''}${boxSelect?' st-box-select':''}`, ref: viewport, tabIndex: 0, 'aria-label': '对话树画布，拖动空白框选，空格或中键拖动平移，滚轮缩放', style:{'--st-zoom':view.zoom,backgroundSize:`${24*view.zoom}px ${24*view.zoom}px`,backgroundPosition:`${view.x}px ${view.y}px`},
       onKeyDown: e => {
         if (e.target !== e.currentTarget) return;
         const here = layout.positions.get(selectedId), list = [...layout.positions.values()];
@@ -375,12 +405,21 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
         if (next) {e.preventDefault();selectNode(next);const p=layout.positions.get(next),r=viewport.current;viewTouched.current=true;setView(v=>{const nv={...v,x:r.clientWidth/2-p.cx*v.zoom,y:r.clientHeight*.58-p.cy*v.zoom};persistCache(graph, next, nv, true, showInternal);return nv;});}
         if (e.key === 'Enter') {e.preventDefault();if(e.shiftKey&&connected)createBranch();else jump(selectedId);}
       },
-      onWheel: e => {if(nodeDrag.current)return;const rect = viewport.current.getBoundingClientRect(); zoomTo(view.zoom * Math.exp(-e.deltaY * .0015), {x: e.clientX - rect.left, y: e.clientY - rect.top});},
+      onWheel: e => {if(nodeDrag.current||marquee.current||drag.current)return;const rect = viewport.current.getBoundingClientRect(); zoomTo(view.zoom * Math.exp(-e.deltaY * .0015), {x: e.clientX - rect.left, y: e.clientY - rect.top});},
       onPointerDown: e => {
-        if (e.target.closest('button,input,.st-node')) return;
-        viewTouched.current = true; e.currentTarget.setPointerCapture(e.pointerId); drag.current = {x: e.clientX, y: e.clientY, view};
+        if (e.target.closest('button,input,.st-node')||busyRef.current||![0,1].includes(e.button)) return;
+        e.preventDefault();e.currentTarget.focus();navigation.cancel();setMenu(null);viewTouched.current = true;e.currentTarget.setPointerCapture(e.pointerId);
+        if(e.button===0&&boxSelect&&!spaceHeld.current){
+          const start=canvasPoint(e),originalIds=selectedIds.length?selectedIds:[selectedId].filter(Boolean);
+          marquee.current={pointerId:e.pointerId,start,base:e.shiftKey||e.ctrlKey||e.metaKey?originalIds:[],originalIds,originalSelected:selected};setSelectionBox(selectionRect(start,start));
+        }else drag.current={x:e.clientX,y:e.clientY,view};
       },
       onPointerMove: e => {
+        const m=marquee.current;
+        if(m?.pointerId===e.pointerId){
+          const rect=selectionRect(m.start,canvasPoint(e)),ids=marqueeIds(layout.positions,rect,m.base);
+          setSelectionBox(rect);setSelectedIds(ids);setSelected(ids.at(-1)??null);selectionAnchor.current=ids[0]??null;return;
+        }
         const n=nodeDrag.current;
         if(n && n.pointerId===e.pointerId) {
           if(!n.moved && Math.hypot(e.clientX-n.x,e.clientY-n.y)<5)return;
@@ -394,9 +433,10 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
         }
       },
       onPointerUp: e => {
+        if(marquee.current?.pointerId===e.pointerId){finishMarquee();return;}
         if(nodeDrag.current?.pointerId===e.pointerId){const n=nodeDrag.current;nodeDrag.current=null;if(n.moved){ignoreClick.current={id:n.id,until:Date.now()+400};savePosition(n.id,n.latest);}return;}
         drag.current = null;
-      }, onPointerCancel: () => {if(nodeDrag.current)ignoreClick.current={id:nodeDrag.current.id,until:Date.now()+400};nodeDrag.current=null;setMoving({});drag.current = null;},onLostPointerCapture:()=>{if(nodeDrag.current){ignoreClick.current={id:nodeDrag.current.id,until:Date.now()+400};nodeDrag.current=null;setMoving({});}}
+      }, onPointerCancel: () => {finishMarquee(true);if(nodeDrag.current)ignoreClick.current={id:nodeDrag.current.id,until:Date.now()+400};nodeDrag.current=null;setMoving({});drag.current = null;},onLostPointerCapture:()=>{if(marquee.current)finishMarquee(true);drag.current=null;if(nodeDrag.current){ignoreClick.current={id:nodeDrag.current.id,until:Date.now()+400};nodeDrag.current=null;setMoving({});}}
     },
       h('div', {className: 'st-world', style: {width: layout.width, height: layout.height, transform: `translate(${view.x}px,${view.y}px) scale(${view.zoom})`}},
         h('svg', {className: 'st-wires', width: layout.width, height: layout.height},
@@ -424,6 +464,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
             h('span',{className:'st-node-flag','aria-hidden':true},label),
             );
         })),
+      selectionBox&&h('div',{className:'st-selection-box','aria-hidden':true,style:{left:selectionBox.left*view.zoom+view.x,top:selectionBox.top*view.zoom+view.y,width:(selectionBox.right-selectionBox.left)*view.zoom,height:(selectionBox.bottom-selectionBox.top)*view.zoom}}),
       Object.keys(presentation.graph.nodes).length===1 && h('div',{className:'st-empty'},h('span',null,'暂无用户输入')),
       h('div',{className:'st-canvas-tools'},h(Button,{icon:'minus',label:'缩小',onClick:()=>zoomTo(view.zoom/1.2)}),h('span',null,`${Math.round(view.zoom*100)}%`),h(Button,{icon:'plus',label:'放大',onClick:()=>zoomTo(view.zoom*1.2)}),h('i'),h(Button,{icon:'fit',label:'适合画布',onClick:fit})),
       ),
@@ -442,7 +483,8 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
         h('button',{role:'menuitem',disabled:busy,onClick:()=>toggleGroup(selectedId,false)},h(Icon,{name:'layers'}),'展开集合'),
         h('button',{role:'menuitem',onClick:()=>{setRename(node.label);setMenu(null);}},'重命名集合'),
         h('button',{role:'menuitem',disabled:busy,onClick:()=>openGroupDialog({type:'split',id:selectedId})},'拆分集合…'),
-        h('button',{role:'menuitem',disabled:busy,onClick:()=>run(async()=>{await mutate({type:'group-dissolve',id:selectedId});setSelected(graph.groups[selectedId].entryId);})},'取消集合'))
+        h('button',{role:'menuitem',disabled:busy,onClick:()=>run(async()=>{await mutate({type:'group-dissolve',id:selectedId});setSelected(graph.groups[selectedId].entryId);})},'取消集合'),
+        h('button',{role:'menuitem',className:'st-danger',disabled:busy,onClick:()=>{setConfirm({type:'group-delete',id:selectedId});setMenu(null);}},h(Icon,{name:'trash'}),'删除集合…'))
       :isDraft?h(React.Fragment,null,
         h('button',{role:'menuitem',disabled:busy,onClick:()=>createBranch()},h(Icon,{name:'play'}),'继续分支'),
         h('button',{role:'menuitem',onClick:()=>{setRename(node.label);setMenu(null);}},'重命名节点'),
@@ -452,15 +494,17 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
         leaf&&selectedId!==current&&h('button',{role:'menuitem',disabled:busy||!connected,onClick:activate},h(Icon,{name:'play'}),'继续这条分支'),
         memberGroup&&h('button',{role:'menuitem',disabled:busy,onClick:()=>toggleGroup(membership,true)},'折叠集合'),
         memberGroup&&memberGroup.entryId!==selectedId&&h('button',{role:'menuitem',disabled:busy,onClick:()=>openGroupDialog({type:'split',id:membership,cutId:selectedId})},'在此拆分集合…'),
+        memberGroup&&h('button',{role:'menuitem',disabled:busy,onClick:()=>run(()=>mutate({type:'group-dissolve',id:membership}))},'取消集合'),
+        memberGroup&&h('button',{role:'menuitem',className:'st-danger',disabled:busy,onClick:()=>{setConfirm({type:'group-delete',id:membership});setMenu(null);}},'删除所属集合…'),
         h('button',{role:'menuitem',onClick:()=>{setRename(node.label);setMenu(null);}},'重命名节点'),
         !connected&&h('button',{role:'menuitem',disabled:busy,onClick:()=>run(()=>mutate({type:'reparent',id:selectedId,parent:'root'}))},'接回起点'),
         selectedId!=='root'&&h('button',{role:'menuitem',className:'st-danger',onClick:()=>{setConfirm({type:'delete',id:selectedId});setMenu(null);}},'删除节点…'))),
     groupDialog&&h(GroupDialog,{key:`${groupDialog.type}:${groupDialog.id??'new'}`,value:groupDialog,graph,busy,onCancel:()=>setGroupDialog(null),onCommit:commitGroup}),
     rename!==null && h('form',{className:'st-dialog st-rename',role:'dialog','aria-label':isGroup?'重命名集合':'重命名节点',onSubmit:e=>{e.preventDefault();run(()=>mutate({type:'rename',id:selectedId,label:rename}));}},h('input',{value:rename,onChange:e=>setRename(e.target.value),maxLength:isGroup?80:200,'aria-label':isGroup?'集合名称':'节点名称',autoFocus:true}),h('button',{type:'submit',disabled:busy},'保存'),h('button',{type:'button',onClick:()=>setRename(null)},'取消')),
-    confirm && h('div',{className:'st-dialog st-confirm',role:'alertdialog','aria-label':'删除节点'},
-      h('strong',null,'如何删除这个节点？'),
+    confirm && h('div',{className:'st-dialog st-confirm',role:'alertdialog','aria-label':confirm.type==='group-delete'?'删除集合':'删除节点'},
+      h('strong',null,confirm.type==='group-delete'?'删除集合内的所有节点？':'如何删除这个节点？'),
       h('p',null,'保留后续会自动接好上下文，可撤销。'),
-      h('div',{className:'st-confirm-actions'},h(Button,{label:'删除并保留后续',onClick:()=>run(()=>mutate({type:'delete',id:confirm.id,grouped:!showInternal})),children:'保留后续'}),h(Button,{label:'删除整枝',onClick:()=>run(()=>mutate({type:'delete',id:confirm.id,subtree:true})),children:'删除整枝'}),h(Button,{label:'取消',onClick:()=>setConfirm(null),children:'取消'}))));
+      h('div',{className:'st-confirm-actions'},h(Button,{label:'删除并保留后续',onClick:()=>run(()=>mutate({type:confirm.type,id:confirm.id,grouped:!showInternal})),children:'保留后续'}),h(Button,{label:'删除整枝',onClick:()=>run(()=>mutate({type:confirm.type,id:confirm.id,subtree:true})),children:'删除整枝'}),h(Button,{label:'取消',onClick:()=>setConfirm(null),children:'取消'}))));
 }
 
 function HeaderButton({ctx, sessionId, selectView}) {

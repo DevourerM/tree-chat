@@ -208,6 +208,22 @@ test('TreeService: 大批历史轮次只构建一次空间索引，条件轮询�
   assert.equal(builds,2);
 });
 
+test('TreeService: 集合显示操作允许生成中执行，删除集合必须等待生成结束并可按新上下文继续', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules();
+  await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
+  const host=createMockHost(Session,4),storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','service-collection-'))),service=new TreeService(host.ctx,storage);
+  let g=await service.get('session-root');const ids=Object.values(g.nodes).filter(n=>n.source).map(n=>n.id);
+  g=await service.edit('session-root',g.revision,{type:'group-create',ids:ids.slice(1,3),name:'删除测试'});const id=Object.keys(g.groups)[0];
+  host.agents.get('session-root').status='running';
+  g=await service.edit('session-root',g.revision,{type:'group-toggle-all',collapsed:false});
+  await assert.rejects(()=>service.edit('session-root',g.revision,{type:'group-delete',id}),/生成|完成/);
+  host.agents.get('session-root').status='idle';g=await service.edit('session-root',g.revision,{type:'group-delete',id});
+  assert.equal(g.nodes[ids[3]].parent,ids[0]);
+  const resumed=await service.activate('session-root',g.revision,ids[3]);
+  const messages=host.liveSessions.get(resumed.sessionId).deriveMessages().filter(m=>m.role==='user');
+  assert.deepEqual(messages.map(m=>m.content[0].text),['问题 1','问题 4']);
+});
+
 test('TreeService: 多个空分枝持久保留；避让手动节点；完成后原 ID 原位填充，只删除指定空枝', {skip: !runtimeDir && '未配置 DSH_DEV_RUNTIME，跳过宿主服务集成测试'}, async()=>{
   const {Session,TreeService}=await loadHostModules();
   await mkdir(join(process.cwd(),'artifacts'),{recursive:true});

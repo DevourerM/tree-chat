@@ -1,7 +1,5 @@
 import {draftBranchesOf,draftForNode,removeDraftBranch} from './branches.js';
-import {conversationView} from './presentation.js';
-import {arrangedPositions} from './layout.js';
-import {validateGroups,applyGroupEdit,moveGroupState,reconcileGroupState} from './group-state.js';
+import {validateGroups,applyGroupEdit,moveGroupState,reconcileGroupState,arrangeVisibleGraph} from './group-state.js';
 export const SCHEMA_VERSION = 1;
 export const ROOT = 'root';
 export const pendingId = graph => graph?.pendingBranch ? `pending:${graph.pendingBranch.sessionId}` : null;
@@ -77,7 +75,7 @@ export function editGraph(original, operation) {
     if (prior.draftBranches === undefined) delete graph.draftBranches;
     if (prior.groups === undefined) delete graph.groups;
   } else if(operation.type.startsWith('group-')){
-    if(operation.type!=='group-toggle'){graph.undo.push(snapshot(graph));graph.undo=graph.undo.slice(-30);graph.redo=[];}
+    if(!['group-toggle','group-toggle-all'].includes(operation.type)){graph.undo.push(snapshot(graph));graph.undo=graph.undo.slice(-30);graph.redo=[];}
     try{applyGroupEdit(graph,operation);}catch(error){throw new TreeError(error.message);}
   } else {
     // Normalize the legacy alias to the same object before editing positions or labels.
@@ -105,10 +103,7 @@ export function editGraph(original, operation) {
         for(const draft of Object.values(draftBranchesOf(graph)))delete draft.position;
         break;
       case 'arrange':
-        for(const [id,position]of Object.entries(arrangedPositions(conversationView(graph,operation.includeInternal===true).graph))){
-          if(Object.hasOwn(graph.groups??{},id))moveGroupState(graph,id,position);
-          else {const target=draftForNode(graph,id)??graph.nodes[id];target.position=position;}
-        }
+        arrangeVisibleGraph(graph,operation.includeInternal===true);
         break;
       case 'reparent':
         if (node.id === ROOT) throw new TreeError('不能修改对话起点的输入');
@@ -140,6 +135,7 @@ export function editGraph(original, operation) {
     }
   }
   reconcileGroupState(graph);
+  if(['group-create','group-toggle','group-toggle-all','group-dissolve','group-split','group-delete'].includes(operation.type))arrangeVisibleGraph(graph,operation.includeInternal===true);
   for(const draft of Object.values(draftBranchesOf(graph)))if(!graph.nodes[draft.parent]||!graph.bindings[draft.sessionId]||!graph.bindings[draft.returnSessionId]||graph.bindings[draft.sessionId].head!==draft.parent)removeDraftBranch(graph,draft.sessionId);
   graph.revision++;
   return validateGraph(graph);

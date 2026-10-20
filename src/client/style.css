@@ -470,3 +470,6 @@ no duplicate panel heading. */
 .st-root .st-dialog-actions button {padding:5px 12px;border:1px solid var(--st-border);border-radius:6px;background:var(--st-card);color:var(--st-text)}
 .st-root .st-dialog-actions button[type=submit] {background:var(--st-accent);color:#fff;border-color:var(--st-accent)}
 .st-root .st-rename {padding:12px;background:var(--st-card);border:1px solid var(--st-border);border-radius:8px}
+.st-root .st-box-select {cursor:crosshair}
+.st-root .st-selection-box {position:absolute;z-index:6;pointer-events:none;border:1px solid var(--st-accent);background:var(--st-soft);border-radius:3px}
+.st-root[data-size=s] .st-toolbar .st-labeled {font-size:0;width:28px;padding:0;gap:0}

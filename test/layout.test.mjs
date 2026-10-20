@@ -53,3 +53,10 @@ test('新节点从已移动父节点下方寻找最近空位，避开现有节�
   graph.nodes.new={...graph.nodes.a,id:'new',parent:'b',position:next};noOverlaps(graph);
   for(const size of ['s','m','l'])assert.equal(layoutGraph(graph,size).positions.get('new').cx,next.x);
 });
+
+test('入口横坐标相同时整理参考分枝内部位置，不恢复为插入顺序',()=>{
+  const g=newGraph('same-entry');
+  for(const [id,parent,x]of [['b','root',140],['a','root',140],['ba','b',600],['aa','a',-300]])g.nodes[id]={id,parent,label:id,position:{x,y:parent==='root'?110:190},createdAt:0,source:{sessionId:g.id,start:0,end:1}};
+  const result=editGraph(g,{type:'arrange',id:'root'});assert.ok(result.nodes.a.position.x<result.nodes.b.position.x);noOverlaps(result);
+  assert.deepEqual(arrangedPositions(result),Object.fromEntries(Object.values(result.nodes).map(n=>[n.id,n.position])));
+});
