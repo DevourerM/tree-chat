@@ -21,6 +21,7 @@ const icons = {
   select: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M8 7l9 4-4 2-2 4z',
   expandAll: 'm7 8 5-5 5 5M12 3v7m-5 6 5 5 5-5m-5 5v-7M3 12h18',
   collapseAll: 'm7 3 5 5 5-5M12 8V1m-5 20 5-5 5 5m-5-5v7M3 12h18',
+  folder: 'M3 7V4h6l2 3h10v13H3zM7 13h10m-3-3 3 3-3 3',
   arrange: 'M12 3v6M5 9h14M5 9v5m14-5v5M2 14h6v6H2zm14 0h6v6h-6z',
 };
 function Icon({name, size = 16}) {
@@ -63,6 +64,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   const [query, setQuery] = useState('');
   const [selectedIds,setSelectedIds]=useState([]),[groupDialog,setGroupDialog]=useState(null);
   const [boxSelect,setBoxSelect]=useState(true),[selectionBox,setSelectionBox]=useState(null);
+  const [projectDialog,setProjectDialog]=useState(false),[projectSummary,setProjectSummary]=useState({enabled:false,error:null});
   const marquee=useRef(null),spaceHeld=useRef(false);
   const selectionAnchor=useRef(null);
   const [menu, setMenu] = useState(null);
@@ -76,6 +78,10 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   const panel = useRef(null), viewport = useRef(null), drag = useRef(null), graphRef = useRef(null), busyRef = useRef(false), viewTouched = useRef(cached?.viewTouched ?? false);
   const nodeDrag=useRef(null),ignoreClick=useRef(null);
   graphRef.current = graph;
+  useEffect(()=>{
+    const cancel=()=>{finishMarquee(true);nodeDrag.current=null;drag.current=null;spaceHeld.current=false;setMoving({});};
+    window.addEventListener('blur',cancel);return()=>window.removeEventListener('blur',cancel);
+  },[]);
 
   const persistCache = useCallback((g, sel, v, vt, si) => {
     if (!g) return;
@@ -101,6 +107,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
 
   const refresh = useCallback(async signal => {
     const next = await api({action: 'get', sessionId,knownRevision:graphRef.current?.revision}, signal);
+    if(next.projectSync&&!signal?.aborted)setProjectSummary(old=>old.enabled===next.projectSync.enabled&&old.error===next.projectSync.error?old:next.projectSync);
     if(next.unchanged)return graphRef.current;
     if (!signal?.aborted) {
       const previousHead = graphRef.current ? currentNode(graphRef.current,sessionId) : null;
@@ -388,10 +395,12 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
       h(Button,{icon:'select',label:'框选节点',pressed:boxSelect,onClick:()=>setBoxSelect(!boxSelect)}),
       h(Button,{icon:hasCollapsed?'expandAll':'collapseAll',label:hasCollapsed?'展开所有集合':'折叠所有集合',disabled:busy||!hasGroups,onClick:toggleAllGroups}),
       h(Button,{icon:'arrange',label:'整理节点',disabled:busy,onClick:()=>{viewTouched.current=false;run(()=>mutate({type:'arrange',id:'root',includeInternal:showInternal}));}}),
+      h('button',{type:'button',className:`st-button${projectSummary.error?' st-sync-error':''}`,'aria-label':'项目同步',title:projectSummary.error??'项目同步','aria-pressed':projectSummary.enabled,onClick:()=>setProjectDialog(true)},h(Icon,{name:'folder'})),
       h('button',{type:'button',className:'st-button','aria-label':'对话树选项','aria-haspopup':'menu','aria-expanded':menu?.kind==='global',onClick:e=>openMenu(e,'global')},h(Icon,{name:'more'}))),
     error && h('div', {className: 'st-error', role: 'alert'}, h('span', null, error), h(Button, {icon: 'close', label: '关闭提示', onClick: () => setError('')})),
     dirty && h('div', {className: 'st-notice'}, '上下文待应用'),
-    h('div', {className: `st-canvas${lod?' st-lod':''}${Object.keys(moving).length?' st-node-dragging':''}${boxSelect?' st-box-select':''}`, ref: viewport, tabIndex: 0, 'aria-label': '对话树画布，拖动空白框选，空格或中键拖动平移，滚轮缩放', style:{'--st-zoom':view.zoom,backgroundSize:`${24*view.zoom}px ${24*view.zoom}px`,backgroundPosition:`${view.x}px ${view.y}px`},
+    h('div', {className: `st-canvas${lod?' st-lod':''}${Object.keys(moving).length?' st-node-dragging':''}${boxSelect?' st-box-select':''}`, ref: viewport, tabIndex: 0, 'aria-label': '对话树画布，左键拖动空白框选，右键、中键或空格拖动平移，滚轮缩放', style:{'--st-zoom':view.zoom,backgroundSize:`${24*view.zoom}px ${24*view.zoom}px`,backgroundPosition:`${view.x}px ${view.y}px`},
+      onContextMenu:e=>{if(!e.target.closest('.st-node'))e.preventDefault();},
       onKeyDown: e => {
         if (e.target !== e.currentTarget) return;
         const here = layout.positions.get(selectedId), list = [...layout.positions.values()];
@@ -407,7 +416,8 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
       },
       onWheel: e => {if(nodeDrag.current||marquee.current||drag.current)return;const rect = viewport.current.getBoundingClientRect(); zoomTo(view.zoom * Math.exp(-e.deltaY * .0015), {x: e.clientX - rect.left, y: e.clientY - rect.top});},
       onPointerDown: e => {
-        if (e.target.closest('button,input,.st-node')||busyRef.current||![0,1].includes(e.button)) return;
+        if (e.target.closest('button,input,.st-node')||busyRef.current||![0,1,2].includes(e.button)) return;
+        finishMarquee();drag.current=null;
         e.preventDefault();e.currentTarget.focus();navigation.cancel();setMenu(null);viewTouched.current = true;e.currentTarget.setPointerCapture(e.pointerId);
         if(e.button===0&&boxSelect&&!spaceHeld.current){
           const start=canvasPoint(e),originalIds=selectedIds.length?selectedIds:[selectedId].filter(Boolean);
@@ -417,6 +427,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
       onPointerMove: e => {
         const m=marquee.current;
         if(m?.pointerId===e.pointerId){
+          if(!(e.buttons&1)){finishMarquee();return;}
           const rect=selectionRect(m.start,canvasPoint(e)),ids=marqueeIds(layout.positions,rect,m.base);
           setSelectionBox(rect);setSelectedIds(ids);setSelected(ids.at(-1)??null);selectionAnchor.current=ids[0]??null;return;
         }
@@ -427,6 +438,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
           n.latest={x:n.position.x+(e.clientX-n.x)/n.zoom,y:n.position.y+(e.clientY-n.y)/n.zoom};setMoving({[n.id]:n.latest});return;
         }
         if (drag.current) {
+          if(!e.buttons){drag.current=null;return;}
           const nv={...view, x: drag.current.view.x + e.clientX - drag.current.x, y: drag.current.view.y + e.clientY - drag.current.y};
           setView(nv);
           persistCache(graph, selectedId, nv, viewTouched.current, showInternal);
@@ -500,6 +512,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
         !connected&&h('button',{role:'menuitem',disabled:busy,onClick:()=>run(()=>mutate({type:'reparent',id:selectedId,parent:'root'}))},'接回起点'),
         selectedId!=='root'&&h('button',{role:'menuitem',className:'st-danger',onClick:()=>{setConfirm({type:'delete',id:selectedId});setMenu(null);}},'删除节点…'))),
     groupDialog&&h(GroupDialog,{key:`${groupDialog.type}:${groupDialog.id??'new'}`,value:groupDialog,graph,busy,onCancel:()=>setGroupDialog(null),onCommit:commitGroup}),
+    projectDialog&&h(ProjectDialog,{sessionId,ctx,onClose:()=>setProjectDialog(false),onStatus:setProjectSummary,onImported:result=>{setProjectDialog(false);setProjectSummary({enabled:false,error:null});setSelectedIds([]);setSelected(result.graph.active);viewTouched.current=false;navigate(result,result.graph.active);}}),
     rename!==null && h('form',{className:'st-dialog st-rename',role:'dialog','aria-label':isGroup?'重命名集合':'重命名节点',onSubmit:e=>{e.preventDefault();run(()=>mutate({type:'rename',id:selectedId,label:rename}));}},h('input',{value:rename,onChange:e=>setRename(e.target.value),maxLength:isGroup?80:200,'aria-label':isGroup?'集合名称':'节点名称',autoFocus:true}),h('button',{type:'submit',disabled:busy},'保存'),h('button',{type:'button',onClick:()=>setRename(null)},'取消')),
     confirm && h('div',{className:'st-dialog st-confirm',role:'alertdialog','aria-label':confirm.type==='group-delete'?'删除集合':'删除节点'},
       h('strong',null,confirm.type==='group-delete'?'删除集合内的所有节点？':'如何删除这个节点？'),

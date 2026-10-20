@@ -473,3 +473,14 @@ no duplicate panel heading. */
 .st-root .st-box-select {cursor:crosshair}
 .st-root .st-selection-box {position:absolute;z-index:6;pointer-events:none;border:1px solid var(--st-accent);background:var(--st-soft);border-radius:3px}
 .st-root[data-size=s] .st-toolbar .st-labeled {font-size:0;width:28px;padding:0;gap:0}
+.st-root .st-project-dialog {display:flex;flex-direction:column;gap:12px;max-height:calc(100% - 24px);overflow:auto;padding:14px;background:var(--st-card);border:1px solid var(--st-border);border-radius:10px}
+.st-root .st-project-heading {display:flex;align-items:center;justify-content:space-between}
+.st-root .st-project-dialog label {display:flex;flex-direction:column;gap:6px;color:var(--st-secondary);font-size:12px}
+.st-root .st-project-path {display:flex;gap:6px;flex-wrap:wrap}
+.st-root .st-project-dialog input,.st-root .st-project-dialog select {min-width:0;width:100%;padding:7px 8px;background:var(--st-bg);color:var(--st-text);border:1px solid var(--st-border);border-radius:6px}
+.st-root .st-project-path input {flex:1 1 120px}
+.st-root .st-project-path button {padding:5px 8px;background:var(--st-hover);color:var(--st-text);border:0;border-radius:6px}
+.st-root .st-project-note {margin:0;color:var(--st-muted);font-size:12px}
+.st-root .st-project-warning,.st-root .st-sync-error {color:var(--dsw-static-red-500,#c54949)}
+.st-root .st-project-dialog hr {width:100%;border:0;border-top:1px solid var(--st-border);margin:2px 0}
+.st-root .st-project-dialog .st-dialog-actions {flex-wrap:wrap}

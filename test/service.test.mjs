@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, mkdir, readFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, readFile,writeFile,stat} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -9,6 +10,8 @@ import {conversationView} from '../src/core/presentation.js';
 import {layoutGraph} from '../src/core/layout.js';
 import {fixture} from './fixtures.mjs';
 import {pluginRoot, resolveDshRuntime} from '../scripts/_env.mjs';
+import {ProjectSync} from '../src/host/project-sync.js';
+import {readArchive} from '../src/host/project-files.js';
 
 let runtimeDir = null;
 try {
@@ -35,9 +38,9 @@ async function loadHostModules() {
   return {Session, KNOWN_SESSION_EVENT_TYPES, TreeService: mod.TreeService,permissionSetters:{setSandboxMode,setApprovalPolicy}};
 }
 
-function createMockHost(Session, initialTurns = 3) {
+function createMockHost(Session, initialTurns = 3, tools = false) {
   const liveSessions = new Map();
-  const rootData = fixture(initialTurns, false);
+  const rootData = fixture(initialTurns, tools);
   const rootHeader = {...rootData.header, id: 'session-root', title: '主对话标题'};
   const rootSession = Session.create('session-root', rootData.events, rootHeader, 0, []);
   liveSessions.set('session-root', rootSession);
@@ -57,6 +60,8 @@ function createMockHost(Session, initialTurns = 3) {
     get archivedSessionIds() { return [...archived]; },
     get pinnedSessionIds() { return [...pinned]; },
     list() { return [workspace]; },
+    async resolveByPath() {return workspace;},
+    async create() {return workspace;},
     async archiveSession(id) { archived.add(id); },
     async unarchiveSession(id) { archived.delete(id); }
   };
@@ -107,7 +112,7 @@ function createMockHost(Session, initialTurns = 3) {
     }
   };
 
-  function appendUserTurn(sessionId, text, kind = 'user') {
+  function appendUserTurn(sessionId, text, kind = 'user',extra = []) {
     const session = liveSessions.get(sessionId);
     assert.ok(session, `missing session ${sessionId}`);
     const events = session.snapshotEvents(0);
@@ -116,7 +121,7 @@ function createMockHost(Session, initialTurns = 3) {
     session.append('step/start', {turn: turnNum, step: 1});
     session.append(
       'user/message',
-      {id: `msg-${sessionId}-${turnNum}`, role: 'user', source: {kind}, content: [{type: 'text', text}]},
+      {id: `msg-${sessionId}-${turnNum}`, role: 'user', source: {kind}, content: [{type: 'text', text},...extra]},
       {surfaceOp: 'append'}
     );
     session.append(
@@ -222,6 +227,53 @@ test('TreeService: 集合显示操作允许生成中执行，删除集合必须�
   const resumed=await service.activate('session-root',g.revision,ids[3]);
   const messages=host.liveSessions.get(resumed.sessionId).deriveMessages().filter(m=>m.role==='user');
   assert.deepEqual(messages.map(m=>m.content[0].text),['问题 1','问题 4']);
+});
+
+test('项目同步：默认不写项目，完整往返集合/空枝/工具/文件附件，导入新身份并按本机权限和目录继续', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async t=>{
+  const {Session,TreeService,permissionSetters}=await loadHostModules();
+  await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
+  const project=await mkdtemp(join(process.cwd(),'artifacts','project-roundtrip-')),storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','project-state-'))),host=createMockHost(Session,4,true);
+  const {owner}=installPermissionOwner(host,permissionSetters),source=host.liveSessions.get('session-root');owner.set(source,'danger-full-access');
+  const file=Buffer.from('conversation as source'),attachmentId='sha256:'+createHash('sha256').update(file).digest('hex'),ref={attachmentId,name:'notes.txt',bytes:file.length};
+  const saved=[];host.services.set('attachments',{async *readFileStream(){yield file;},async saveFile(input){saved.push(Buffer.from(input.data));return {...ref};}});
+  host.appendUserTurn('session-root','问题 附件','user',[{type:'file',attachment:ref}]);
+  const service=new TreeService(host.ctx,storage,permissionSetters),sync=new ProjectSync(service);t.after(()=>sync.dispose());
+  let graph=await service.get('session-root');await assert.rejects(stat(join(project,'.tree-chat')),e=>e.code==='ENOENT');
+  const ids=Object.values(graph.nodes).filter(n=>n.source).map(n=>n.id);
+  graph=await service.edit('session-root',graph.revision,{type:'group-create',ids:ids.slice(0,2),name:'可迁移集合'});
+  const branch=await service.branch('session-root',graph.revision,ids[1]);
+  let status=await sync.configure(branch.sessionId,project,true);assert.equal(status.enabled,true);
+  const archive=await readArchive(project,status.treeId);assert.equal(archive.manifest.assets.length,1);assert.ok(archive.graph.draftBranches);
+  const markdown=await readFile(join(project,'.tree-chat/trees',status.treeId,'conversation.md'),'utf8');assert.match(markdown,/可迁移集合/);assert.match(markdown,/tool-call|工具/);
+  owner.set(host.liveSessions.get(branch.sessionId),'workspace-write');const oldSeq=source.seq;
+  const restored=await sync.import(branch.sessionId,project,status.treeId);assert.notEqual(restored.graph.id,graph.id);assert.equal(source.seq,oldSeq);
+  assert.equal(saved.length,1);assert.deepEqual(saved[0],file);assert.equal(Object.values(restored.graph.groups)[0].name,'可迁移集合');
+  assert.equal((await sync.link(restored.graph.id)).enabled,false);
+  for(const id of Object.keys(restored.graph.bindings)){assert.equal(host.liveSessions.get(id).header.cwd,project);assert.equal(owner.current(host.liveSessions.get(id)),'workspace-write');}
+  const root=await service.load(restored.graph.id);assert.equal(root.native.deriveMessages().filter(m=>m.role==='tool').length,1);
+  host.appendUserTurn(restored.sessionId,'问题 迁移后继续');const continued=await service.get(restored.sessionId);assert.ok(Object.values(continued.nodes).some(n=>n.label==='问题 迁移后继续'));
+  status=await sync.configure(restored.sessionId,project,true);assert.equal(status.records.length,1,'导入后启用同一记录，不能无意创建第二份');
+  const second=await readArchive(project,status.treeId);assert.equal(second.graph.id,'session-root');assert.ok(Object.values(second.graph.nodes).some(n=>n.label==='问题 迁移后继续'));
+  const destination=createMockHost(Session,0);destination.services.set('attachments',host.services.get('attachments'));
+  const otherService=new TreeService(destination.ctx,new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','project-other-host-')))),otherSync=new ProjectSync(otherService);t.after(()=>otherSync.dispose());
+  const originalEmpty=destination.liveSessions.get('session-root').snapshotEvents(0);
+  const migrated=await otherSync.import('session-root',project,status.treeId);assert.notEqual(migrated.graph.id,'session-root');assert.deepEqual(destination.liveSessions.get('session-root').snapshotEvents(0),originalEmpty,'另一宿主上同名空会话不能被覆盖');
+  assert.equal(destination.liveSessions.get(migrated.graph.id).deriveMessages().filter(m=>m.role==='tool').length,1);
+});
+
+test('项目同步：自动跟进完成消息、关闭不删文件、重启读取配置，外部编辑暂停且可另存副本', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async t=>{
+  const {Session,TreeService}=await loadHostModules();await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
+  const project=await mkdtemp(join(process.cwd(),'artifacts','project-auto-')),storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','project-auto-state-'))),host=createMockHost(Session,2),service=new TreeService(host.ctx,storage);
+  const sync=new ProjectSync(service);t.after(()=>sync.dispose());host.agents.get('session-root').status='running';const status=await sync.configure('session-root',project,true);
+  assert.equal(status.waiting,true);await assert.rejects(stat(join(project,'.tree-chat')),e=>e.code==='ENOENT');host.agents.get('session-root').status='idle';await sync.write('session-root',true);
+  host.appendUserTurn('session-root','问题 自动同步');await sync.event('session-root');await new Promise(r=>setTimeout(r,1100));
+  assert.ok(Object.values((await readArchive(project,status.treeId)).graph.nodes).some(n=>n.label==='问题 自动同步'));
+  const file=join(project,'.tree-chat/trees',status.treeId,'tree.json');await writeFile(file,'external edit');
+  await assert.rejects(sync.configure('session-root',project,true),/树文件|外部修改/);assert.ok(sync.summary('session-root').error);assert.equal(await readFile(file,'utf8'),'external edit');
+  const copy=await sync.configure('session-root',project,true,true);assert.notEqual(copy.treeId,status.treeId);assert.equal(copy.records.length,2);assert.equal(await readFile(file,'utf8'),'external edit');
+  await sync.configure('session-root',project,false);host.appendUserTurn('session-root','问题 不同步');await sync.event('session-root');await new Promise(r=>setTimeout(r,800));
+  assert.ok(!Object.values((await readArchive(project,copy.treeId)).graph.nodes).some(n=>n.label==='问题 不同步'));
+  sync.dispose();const again=new ProjectSync(service);t.after(()=>again.dispose());await again.start();assert.equal((await again.status('session-root',project)).enabled,false);
 });
 
 test('TreeService: 多个空分枝持久保留；避让手动节点；完成后原 ID 原位填充，只删除指定空枝', {skip: !runtimeDir && '未配置 DSH_DEV_RUNTIME，跳过宿主服务集成测试'}, async()=>{

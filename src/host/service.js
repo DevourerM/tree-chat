@@ -77,7 +77,7 @@ export class TreeService {
       }
       return event;
     });
-    const value = {events, surface, native, header: data.session, turns:turnsOf(events)};
+    const value = {events, surface, native, header: data.session, inheritedEventCount:native.inheritedEventCount,turns:turnsOf(events)};
     this.loaded.delete(sessionId); this.loaded.set(sessionId, {cursor: events.at(-1)?.seq ?? -1, value});
     if (this.loaded.size > 12) this.loaded.delete(this.loaded.keys().next().value);
     return value;
@@ -187,8 +187,11 @@ export class TreeService {
   }
   async get(sessionId,knownRevision) {
     const graph=await this.sync(sessionId);
-    return knownRevision===graph.revision?{unchanged:true,revision:graph.revision}:publicGraph(graph);
+    if(this.projects)await this.projects.link(graph.id);
+    const projectSync=this.projects?.summary(graph.id);
+    return knownRevision===graph.revision?{unchanged:true,revision:graph.revision,...(projectSync?{projectSync}:{})}:{...publicGraph(graph),...(projectSync?{projectSync}:{})};
   }
+  validateArchive(data){return Session.create(data.header.id,data.events,data.header,data.inheritedEventCount,this.ctx.sessions.projections).deriveMessages();}
   async locate(sessionId,id) {
     const graph=await this.sync(sessionId), node=Object.hasOwn(graph.nodes,id)?graph.nodes[id]:undefined;
     if(!node)throw new TreeError('节点不存在');

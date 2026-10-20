@@ -2,7 +2,7 @@
 import {fixture,automationFixture} from '../test/fixtures.mjs';
 import {newGraph} from '../src/core/graph.js';
 import {turnsOf} from '../src/host/context.js';
-import {writeFile,mkdir} from 'node:fs/promises';
+import {writeFile,mkdir,readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {pluginRoot, resolveArtifactsDir, importDshPackage} from './_env.mjs';
 
@@ -27,6 +27,12 @@ export async function apply(ctx) {
   try { await ctx.sessionQuery.readSession('session-tree-demo'); exists=true; } catch(e) { if(e.code!=='SESSION_QUERY_SESSION_NOT_FOUND')throw e; }
   if(!exists){
   const data=process.env.TREE_AUTOMATION_FIXTURE?automationFixture():fixture(Number(process.env.TREE_FIXTURE_TURNS)||4); const preset=await ctx.agentPresets.resolve('minimal');
+  if(process.env.TREE_MEDIA_FIXTURE){
+    const attachments=ctx.get('attachments'),last=data.events.findLast(e=>e.type==='user/message');
+    const image=await attachments.saveImage({data:await readFile(join(pluginRoot,'docs/images/tree-chat-1.1.png')),mediaType:'image/png',name:'sample.png'});
+    const file=await attachments.saveFile({data:Buffer.from('Project attachment fixture'),name:'notes.txt'});
+    last.data.content.push({type:'image',attachment:image},{type:'file',attachment:file});
+  }
   await ctx.agents.create({sessionId:'session-tree-demo',seed:data.events,meta:{cwd:pluginRoot,agentPreset:preset.id},agentOptions:{provider:'test',model:'test'},setup:async(agentCtx,agent)=>{
     await ctx.agentPresets.mount(agentCtx,preset.id);
     agent.session.append('model/selection',{provider:'test',model:'test'});
