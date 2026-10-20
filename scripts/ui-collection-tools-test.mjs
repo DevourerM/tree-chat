@@ -15,11 +15,14 @@ try{
   async function frame(first,last,modifiers=[]){
     const a=await node(first).boundingBox(),b=await node(last).boundingBox();
     for(const key of modifiers)await page.keyboard.down(key);
-    await page.mouse.move(Math.min(a.x,b.x)-10,a.y-10);await page.mouse.down();
+    const before=await root.locator('.st-world').evaluate(e=>getComputedStyle(e).transform);
+    await page.mouse.move(Math.min(a.x,b.x)-10,a.y-10);await page.mouse.down({button:'right'});
     await page.mouse.move(Math.max(a.x+a.width,b.x+b.width)+10,b.y+b.height+10,{steps:12});
-    assert.equal(await root.locator('.st-selection-box').count(),1);await page.mouse.up();
+    assert.equal(await root.locator('.st-selection-box').count(),1);await page.mouse.up({button:'right'});
     for(const key of modifiers)await page.keyboard.up(key);
     assert.equal(await root.locator('.st-selection-box').count(),0);
+    assert.equal(await root.locator('.st-world').evaluate(e=>getComputedStyle(e).transform),before,'right drag selects without panning');
+    assert.equal(await root.getByRole('menu').count(),0,'right drag must not open a node menu on release');
   }
   async function create(name){await root.getByRole('button',{name:'合并为集合',exact:true}).click();await root.getByRole('textbox',{name:'集合名称',exact:true}).fill(name);return edit(()=>root.getByRole('button',{name:'合并',exact:true}).click());}
   await page.goto(process.argv[2],{waitUntil:'networkidle'});
@@ -27,13 +30,12 @@ try{
   await page.getByText(/^tree-chat交互验证/).first().click();await page.getByRole('button',{name:'打开 tree-chat'}).click();await node('问题 8').waitFor();
   const handle=await page.locator('[data-side=rightbar]').boundingBox();await page.mouse.move(handle.x+handle.width/2,30);await page.mouse.down();await page.mouse.move(829,30,{steps:12});await page.mouse.up();
   await root.getByRole('button',{name:'适合画布',exact:true}).click();
-  assert.equal(await root.getByRole('button',{name:'框选节点',exact:true}).getAttribute('aria-pressed'),'true');
   await frame('问题 2','问题 5');assert.equal(await root.locator('.st-selected').count(),4);
   await node('问题 1').click({modifiers:['Control']});assert.equal(await root.locator('.st-selected').count(),5);
   await frame('问题 6','问题 6',['Shift']);assert.equal(await root.locator('.st-selected').count(),6);
   await root.getByRole('button',{name:'缩小',exact:true}).click();await frame('问题 2','问题 5');assert.equal(await root.locator('.st-selected').count(),4);
-  const start=await node('问题 1').boundingBox();await page.mouse.move(start.x-10,start.y-10);await page.mouse.down();await page.mouse.move(start.x+start.width+10,start.y+start.height+10,{steps:6});await page.keyboard.press('Escape');await page.mouse.up();assert.equal(await root.locator('.st-selected').count(),4);
-  await page.mouse.move(start.x-10,start.y-10);await page.mouse.down();await page.mouse.move(start.x+start.width+10,start.y+start.height+10,{steps:6});await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.mouse.up();assert.equal(await root.locator('.st-selection-box').count(),0);assert.equal(await root.locator('.st-selected').count(),4,'losing window focus restores the original selection');
+  const start=await node('问题 1').boundingBox();await page.mouse.move(start.x-10,start.y-10);await page.mouse.down({button:'right'});await page.mouse.move(start.x+start.width+10,start.y+start.height+10,{steps:6});await page.keyboard.press('Escape');await page.mouse.up({button:'right'});assert.equal(await root.locator('.st-selected').count(),4);
+  await page.mouse.move(start.x-10,start.y-10);await page.mouse.down({button:'right'});await page.mouse.move(start.x+start.width+10,start.y+start.height+10,{steps:6});await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.mouse.up({button:'right'});assert.equal(await root.locator('.st-selection-box').count(),0);assert.equal(await root.locator('.st-selected').count(),4,'losing window focus restores the original selection');
   assert.equal(requests.filter(r=>r.action==='edit').length,0,'selection alone never writes graph');
   let graph=await create('四轮集合'),id=Object.keys(graph.groups)[0];await noOverlap();
   const groupBox=await node('四轮集合').boundingBox(),nextBox=await node('问题 6').boundingBox();assert.ok(nextBox.y-groupBox.y<110,'collapse must close the old multi-turn gap');
@@ -45,13 +47,15 @@ try{
     await edit(()=>root.getByRole('button',{name:'展开所有集合',exact:true}).click());await noOverlap();
     await edit(()=>root.getByRole('button',{name:'折叠所有集合',exact:true}).click());await noOverlap();assert.equal(await root.locator('.st-group').count(),2);
   }
-  // Space + left drag and middle drag continue to pan independently of box selection.
+  // Plain left, middle and Space + left all pan without changing selection.
   await root.locator('.st-canvas').focus();const canvas=await root.locator('.st-canvas').boundingBox();
-  for(const button of ['left','middle','right']){
+  for(const [button,space] of [['left',false],['middle',false],['left',true]]){
+    const selection=await root.locator('.st-selected').evaluateAll(es=>es.map(e=>e.dataset.nodeId));
     const before=await root.locator('.st-world').evaluate(e=>{const m=new DOMMatrix(getComputedStyle(e).transform);return {x:m.e,y:m.f};});
-    if(button==='left')await page.keyboard.down('Space');await page.mouse.move(canvas.x+15,canvas.y+35);await page.mouse.down({button});await page.mouse.move(canvas.x+40,canvas.y+50,{steps:8});await page.mouse.up({button});if(button==='left')await page.keyboard.up('Space');
+    if(space)await page.keyboard.down('Space');await page.mouse.move(canvas.x+15,canvas.y+35);await page.mouse.down({button});await page.mouse.move(canvas.x+40,canvas.y+50,{steps:8});await page.mouse.up({button});if(space)await page.keyboard.up('Space');
     await page.waitForFunction(({x,y})=>{const r=[...document.querySelectorAll('.st-root')].find(e=>e.getBoundingClientRect().width&&getComputedStyle(e).visibility!=='hidden');const m=new DOMMatrix(getComputedStyle(r.querySelector('.st-world')).transform);return Math.abs(m.e-x-25)<1&&Math.abs(m.f-y-15)<1;},before,{timeout:2500}).catch(async error=>{throw Error(`${button} pan: ${JSON.stringify(before)} -> ${await root.locator('.st-world').evaluate(e=>getComputedStyle(e).transform)}; ${error.message}`);});
     assert.equal(await root.locator('.st-selection-box').count(),0,'pan buttons must never enter marquee selection');
+    assert.deepEqual(await root.locator('.st-selected').evaluateAll(es=>es.map(e=>e.dataset.nodeId)),selection,'panning preserves selection');
   }
   await node('四轮集合').click({button:'right'});await root.getByRole('menuitem',{name:'删除集合…',exact:true}).click();
   await root.getByRole('alertdialog',{name:'删除集合',exact:true}).waitFor();

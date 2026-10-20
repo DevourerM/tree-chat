@@ -18,7 +18,6 @@ const icons = {
   play: 'm8 4 12 8-12 8z', search: 'M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16m6-2 6 6',
   download: 'M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4',
   layers: 'm12 3 10 5-10 5L2 8zm-9 9 9 5 9-5m-18 5 9 5 9-5',
-  select: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M8 7l9 4-4 2-2 4z',
   expandAll: 'm7 8 5-5 5 5M12 3v7m-5 6 5 5 5-5m-5 5v-7M3 12h18',
   collapseAll: 'm7 3 5 5 5-5M12 8V1m-5 20 5-5 5 5m-5-5v7M3 12h18',
   folder: 'M3 7V4h6l2 3h10v13H3zM7 13h10m-3-3 3 3-3 3',
@@ -63,9 +62,9 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedIds,setSelectedIds]=useState([]),[groupDialog,setGroupDialog]=useState(null);
-  const [boxSelect,setBoxSelect]=useState(true),[selectionBox,setSelectionBox]=useState(null);
+  const [selectionBox,setSelectionBox]=useState(null);
   const [projectDialog,setProjectDialog]=useState(false),[projectSummary,setProjectSummary]=useState({enabled:false,error:null});
-  const marquee=useRef(null),spaceHeld=useRef(false);
+  const marquee=useRef(null);
   const selectionAnchor=useRef(null);
   const [menu, setMenu] = useState(null);
   const [rename, setRename] = useState(null);
@@ -79,7 +78,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   const nodeDrag=useRef(null),ignoreClick=useRef(null);
   graphRef.current = graph;
   useEffect(()=>{
-    const cancel=()=>{finishMarquee(true);nodeDrag.current=null;drag.current=null;spaceHeld.current=false;setMoving({});};
+    const cancel=()=>{finishMarquee(true);nodeDrag.current=null;drag.current=null;setMoving({});};
     window.addEventListener('blur',cancel);return()=>window.removeEventListener('blur',cancel);
   },[]);
 
@@ -383,23 +382,22 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   const dirty = activePath.join('/') !== graph.bindings[sessionId]?.key;
   const lod = view.zoom < .6;
   const hasGroups=Object.keys(graph.groups??{}).length>0,hasCollapsed=Object.values(graph.groups??{}).some(g=>g.collapsed);
-  return h('section', {className: 'st-root', ref: panel, 'data-size': size, 'aria-label': 'tree-chat 对话管理', 'aria-busy': busy, onPointerDown:e=>{if(menu&&!e.target.closest('.st-node-menu'))setMenu(null);},onKeyUp:e=>{if(e.code==='Space')spaceHeld.current=false;},onBlur:e=>{if(!e.currentTarget.contains(e.relatedTarget))spaceHeld.current=false;}, onKeyDown: e => {
+  return h('section', {className: 'st-root', ref: panel, 'data-size': size, 'aria-label': 'tree-chat 对话管理', 'aria-busy': busy, onPointerDown:e=>{if(menu&&!e.target.closest('.st-node-menu'))setMenu(null);}, onKeyDown: e => {
     if (e.target.matches('input,textarea,select,[contenteditable=true]')&&e.key!=='Escape') return;
-    if(e.code==='Space'&&e.target.matches('.st-canvas,.st-node-body')){e.preventDefault();spaceHeld.current=true;}
+    if(e.code==='Space'&&e.target.matches('.st-canvas,.st-node-body'))e.preventDefault();
     if (e.key === 'Escape') {if(nodeDrag.current)ignoreClick.current={id:nodeDrag.current.id,until:Date.now()+400};nodeDrag.current=null;finishMarquee(true);drag.current=null;setMoving({});setConfirm(null);setRename(null);setGroupDialog(null);setMenu(null);navigation.cancel();}
     if ((e.ctrlKey || e.metaKey) && ['z','y'].includes(e.key.toLowerCase())) {e.preventDefault();run(() => mutate({type:e.shiftKey||e.key.toLowerCase()==='y'?'redo':'undo'}));}
   }},
     h('div', {className: 'st-toolbar'}, h('label', {className: 'st-search'}, h(Icon, {name: 'search', size: 14}), h('input', {value: query, onChange: e => setQuery(e.target.value), placeholder: '搜索节点', 'aria-label': '搜索节点'})),
       h(Button,{icon:'plus',label:'新建分支',disabled:busy||!connected||isGroup,onClick:()=>createBranch(),children:'新建分支'}),
       h(Button,{icon:'layers',label:'合并为集合',disabled:busy||!groupCandidate.ok||selectedIds.some(id=>presentation.graph.nodes[id]?.kind==='pending'),onClick:()=>openGroupDialog({type:'create',ids:selectedIds,includeInternal:showInternal})}),
-      h(Button,{icon:'select',label:'框选节点',pressed:boxSelect,onClick:()=>setBoxSelect(!boxSelect)}),
       h(Button,{icon:hasCollapsed?'expandAll':'collapseAll',label:hasCollapsed?'展开所有集合':'折叠所有集合',disabled:busy||!hasGroups,onClick:toggleAllGroups}),
       h(Button,{icon:'arrange',label:'整理节点',disabled:busy,onClick:()=>{viewTouched.current=false;run(()=>mutate({type:'arrange',id:'root',includeInternal:showInternal}));}}),
       h('button',{type:'button',className:`st-button${projectSummary.error?' st-sync-error':''}`,'aria-label':'项目同步',title:projectSummary.error??'项目同步','aria-pressed':projectSummary.enabled,onClick:()=>setProjectDialog(true)},h(Icon,{name:'folder'})),
       h('button',{type:'button',className:'st-button','aria-label':'对话树选项','aria-haspopup':'menu','aria-expanded':menu?.kind==='global',onClick:e=>openMenu(e,'global')},h(Icon,{name:'more'}))),
     error && h('div', {className: 'st-error', role: 'alert'}, h('span', null, error), h(Button, {icon: 'close', label: '关闭提示', onClick: () => setError('')})),
     dirty && h('div', {className: 'st-notice'}, '上下文待应用'),
-    h('div', {className: `st-canvas${lod?' st-lod':''}${Object.keys(moving).length?' st-node-dragging':''}${boxSelect?' st-box-select':''}`, ref: viewport, tabIndex: 0, 'aria-label': '对话树画布，左键拖动空白框选，右键、中键或空格拖动平移，滚轮缩放', style:{'--st-zoom':view.zoom,backgroundSize:`${24*view.zoom}px ${24*view.zoom}px`,backgroundPosition:`${view.x}px ${view.y}px`},
+    h('div', {className: `st-canvas${lod?' st-lod':''}${Object.keys(moving).length?' st-node-dragging':''}${selectionBox?' st-box-select':''}`, ref: viewport, tabIndex: 0, 'aria-label': '对话树画布，左键或中键拖动空白平移，右键拖动空白框选，滚轮缩放', style:{'--st-zoom':view.zoom,backgroundSize:`${24*view.zoom}px ${24*view.zoom}px`,backgroundPosition:`${view.x}px ${view.y}px`},
       onContextMenu:e=>{if(!e.target.closest('.st-node'))e.preventDefault();},
       onKeyDown: e => {
         if (e.target !== e.currentTarget) return;
@@ -419,15 +417,15 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
         if (e.target.closest('button,input,.st-node')||busyRef.current||![0,1,2].includes(e.button)) return;
         finishMarquee();drag.current=null;
         e.preventDefault();e.currentTarget.focus();navigation.cancel();setMenu(null);viewTouched.current = true;e.currentTarget.setPointerCapture(e.pointerId);
-        if(e.button===0&&boxSelect&&!spaceHeld.current){
+        if(e.button===2){
           const start=canvasPoint(e),originalIds=selectedIds.length?selectedIds:[selectedId].filter(Boolean);
           marquee.current={pointerId:e.pointerId,start,base:e.shiftKey||e.ctrlKey||e.metaKey?originalIds:[],originalIds,originalSelected:selected};setSelectionBox(selectionRect(start,start));
-        }else drag.current={x:e.clientX,y:e.clientY,view};
+        }else drag.current={pointerId:e.pointerId,buttons:e.button===1?4:1,x:e.clientX,y:e.clientY,view};
       },
       onPointerMove: e => {
         const m=marquee.current;
         if(m?.pointerId===e.pointerId){
-          if(!(e.buttons&1)){finishMarquee();return;}
+          if(!(e.buttons&2)){finishMarquee();return;}
           const rect=selectionRect(m.start,canvasPoint(e)),ids=marqueeIds(layout.positions,rect,m.base);
           setSelectionBox(rect);setSelectedIds(ids);setSelected(ids.at(-1)??null);selectionAnchor.current=ids[0]??null;return;
         }
@@ -437,8 +435,8 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
           n.moved=true;viewTouched.current=true;
           n.latest={x:n.position.x+(e.clientX-n.x)/n.zoom,y:n.position.y+(e.clientY-n.y)/n.zoom};setMoving({[n.id]:n.latest});return;
         }
-        if (drag.current) {
-          if(!e.buttons){drag.current=null;return;}
+        if (drag.current?.pointerId===e.pointerId) {
+          if(!(e.buttons&drag.current.buttons)){drag.current=null;return;}
           const nv={...view, x: drag.current.view.x + e.clientX - drag.current.x, y: drag.current.view.y + e.clientY - drag.current.y};
           setView(nv);
           persistCache(graph, selectedId, nv, viewTouched.current, showInternal);
