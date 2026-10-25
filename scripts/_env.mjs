@@ -19,6 +19,7 @@ export function resolveArtifactsDir() {
 export function resolveDshRuntime() {
   const hit = firstExisting([
     process.env.DSH_DEV_RUNTIME,
+    resolve(pluginRoot, 'research/compat-0.2.1-rc.3/dsh/node_modules'),
     resolve(pluginRoot, 'research/compat-0.2.1-rc.2/dsh/node_modules'),
     resolve(pluginRoot, 'research/dsh/node_modules')
   ]);

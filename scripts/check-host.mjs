@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {join} from 'node:path';
 import {fixture,automationFixture} from '../test/fixtures.mjs';
 import {conversationView} from '../src/core/presentation.js';
 import {newGraph, editGraph} from '../src/core/graph.js';
 import {turnsOf, compilePath} from '../src/host/context.js';
-import {importDshPackage} from './_env.mjs';
+import {importDshPackage,pluginRoot,resolveDshRuntime} from './_env.mjs';
+
+const manifest=JSON.parse(await readFile(join(pluginRoot,'package.json'),'utf8'));
+const {default:semver}=await importDshPackage('semver/index.js');
+for(const name of ['@deepseek-ai/dsh-session','@deepseek-ai/dsh-sandbox-policy','@deepseek-ai/dsh-user-approval']){
+  const installed=JSON.parse(await readFile(join(resolveDshRuntime(),name,'package.json'),'utf8'));
+  assert.ok(semver.satisfies(installed.version,manifest.peerDependencies[name]),`${name} ${installed.version} 不满足插件依赖 ${manifest.peerDependencies[name]}；请核对预发布版本范围。`);
+}
+console.log('PASS: installed DSH packages satisfy plugin peer dependencies, including prerelease admission.');
 
 const {Session, KNOWN_SESSION_EVENT_TYPES} = await importDshPackage('@deepseek-ai/dsh-session/lib/index.js');
 const {assertReleasedV4Relationships, releasedV4SessionFormatCodec} = await importDshPackage('@deepseek-ai/dsh-session-format-v3-to-v4/lib/index.js');

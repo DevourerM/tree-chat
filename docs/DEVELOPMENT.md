@@ -24,7 +24,7 @@ npm run pack:plugin
 
 开发脚本默认只查找本项目内的资源，不回退使用父级或其他插件的目录。可通过环境变量覆盖：
 
-- `DSH_DEV_RUNTIME`：真实 DSH 运行时的 `node_modules`；默认优先 `research/compat-0.2.1-rc.2/dsh/node_modules`，其次 `research/dsh/node_modules`。
+- `DSH_DEV_RUNTIME`：真实 DSH 运行时的 `node_modules`；默认依次查找 `research/compat-0.2.1-rc.3/dsh/node_modules`、`research/compat-0.2.1-rc.2/dsh/node_modules` 和 `research/dsh/node_modules`。
 - `TREE_ARTIFACTS`：默认 `artifacts/`。
 - `TREE_PLAYWRIGHT`：浏览器驱动入口；默认查找本项目的 `node_modules/playwright/index.mjs` 和 `artifacts/browser-tools/node_modules/playwright/index.mjs`。
 - `TREE_CHROMIUM`：测试 Chromium 的可执行文件，未设置时使用 Playwright 默认浏览器。
