@@ -246,6 +246,8 @@ C:\Downloads\tree-chat-1.2.1.tgz
 
 ## 开发
 
+本插件是独立 Git 项目。源码、开发运行时、测试产物和协作资料均放在本目录；父级可以并列存放其他插件，各自独立建仓库。目录与本地历史说明见 [开发目录说明](docs/DEVELOPMENT.md)。
+
 ```bash
 git clone https://github.com/DevourerM/tree-chat.git
 cd tree-chat

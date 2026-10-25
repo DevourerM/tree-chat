@@ -2,6 +2,7 @@ node_modules/
 artifacts/
 research/
 web-agent-handoff/
+tools/web-agent/
 dist/*.tgz
 *.log
 .DS_Store

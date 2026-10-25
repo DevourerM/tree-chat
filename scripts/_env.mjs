@@ -13,18 +13,14 @@ function firstExisting(candidates) {
 
 export function resolveArtifactsDir() {
   if (process.env.TREE_ARTIFACTS) return resolve(process.env.TREE_ARTIFACTS);
-  return firstExisting([
-    resolve(pluginRoot, '../artifacts'),
-    resolve(pluginRoot, 'artifacts')
-  ]) ?? resolve(pluginRoot, 'artifacts');
+  return resolve(pluginRoot, 'artifacts');
 }
 
 export function resolveDshRuntime() {
   const hit = firstExisting([
     process.env.DSH_DEV_RUNTIME,
-    resolve(pluginRoot, 'research/dsh/node_modules'),
-    resolve(pluginRoot, '../research/dsh/node_modules'),
-    resolve(pluginRoot, '../../research/dsh/node_modules')
+    resolve(pluginRoot, 'research/compat-0.2.1-rc.2/dsh/node_modules'),
+    resolve(pluginRoot, 'research/dsh/node_modules')
   ]);
   if (!hit) {
     throw new Error('未找到 DSH 开发运行时 node_modules。请设置环境变量 DSH_DEV_RUNTIME=/path/to/dsh/node_modules');
@@ -45,9 +41,7 @@ export async function loadPlaywright() {
   const hit = firstExisting([
     process.env.TREE_PLAYWRIGHT,
     resolve(pluginRoot, 'node_modules/playwright/index.mjs'),
-    resolve(pluginRoot, 'artifacts/browser-tools/node_modules/playwright/index.mjs'),
-    resolve(pluginRoot, '../artifacts/browser-tools/node_modules/playwright/index.mjs'),
-    resolve(pluginRoot, '../../artifacts/browser-tools/node_modules/playwright/index.mjs')
+    resolve(pluginRoot, 'artifacts/browser-tools/node_modules/playwright/index.mjs')
   ]);
   if (hit) return import(pathToFileURL(hit).href);
   try {
