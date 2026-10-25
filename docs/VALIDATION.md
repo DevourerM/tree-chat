@@ -2,7 +2,7 @@
 
 本文件含早期版本的开发历史，预览和端口连线等旧交互已移除；当前操作以 [README](../README.md) 为准。0.2.1 发布审核及修复范围见 [RELEASE-AUDIT.md](RELEASE-AUDIT.md)。
 
-目标：Windows / DeepSeek Harness 0.2.0-rc.2 与 0.2.1-rc.2，使用发行包中的真实 Session、持久化格式解释器和完整 Web Host。
+目标：Windows / DeepSeek Harness 0.2.0-rc.2、0.2.1-rc.2 与 0.2.1-rc.3，使用发行包中的真实 Session、持久化格式解释器和完整 Web Host。
 
 ## 1.2.2 / DSH 0.2.1-rc.3 适配（2026-10-25）
 
@@ -16,6 +16,8 @@
 - 修复后的媒体迁移和受控延迟项目同步在旧 rc.2 原生 Host 上同样通过；独立源码无 DSH 环境完成构建、36 项核心测试（9 项宿主测试明确跳过）、标准包验证，客户端输出一致。
 - 辅助安装工具使用实际 rc.3 app.asar 完成检查、安装、卸载、旧名迁移及重复无备份更新；全部只针对独立测试 profile。
 - 1.2.2 标准 .tgz 在空白 rc.3 Host 的原生插件界面安装并立即启用成功；包内无开发运行时、测试数据或本机路径。
+- [1.2.2 代码 CI](https://github.com/DevourerM/tree-chat/actions/runs/40165137624) 通过；[公开发行包](https://github.com/DevourerM/tree-chat/releases/tag/v1.2.2) 的下载地址在另一空白 rc.3 profile 中通过原生插件界面安装并启用，版本和客户端哈希与已测试源码及本机安装一致。
+- 本机 Desktop 直接无备份更新至 1.2.2，未关闭日常 DSH，重启后生效；所有 GUI 测试启动的隔离 Host 均已关闭。
 - 隔离运行时补齐官方 app.asar.unpacked 中的原生加载器、Koffi、fflate 和图像处理模块；Office/PDF 转换未纳入本插件验收，不复制到插件包。
 
 ## 1.2.1 鼠标操作更新（2026-10-20）
