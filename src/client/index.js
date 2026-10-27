@@ -17,6 +17,7 @@ const icons = {
   down: 'm6 9 6 6 6-6', more: 'M5 12h.01M12 12h.01M19 12h.01',
   play: 'm8 4 12 8-12 8z', search: 'M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16m6-2 6 6',
   download: 'M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4',
+  upload: 'M12 15V3M7 8l5-5 5 5M4 17v4h16v-4',
   layers: 'm12 3 10 5-10 5L2 8zm-9 9 9 5 9-5m-18 5 9 5 9-5',
   expandAll: 'm7 8 5-5 5 5M12 3v7m-5 6 5 5 5-5m-5 5v-7M3 12h18',
   collapseAll: 'm7 3 5 5 5-5M12 8V1m-5 20 5-5 5 5m-5-5v7M3 12h18',
@@ -75,7 +76,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   const [moving, setMoving] = useState({});
   const [view, setView] = useState(cached?.view ?? {x: 0, y: 0, zoom: .8});
   const panel = useRef(null), viewport = useRef(null), drag = useRef(null), graphRef = useRef(null), busyRef = useRef(false), viewTouched = useRef(cached?.viewTouched ?? false);
-  const nodeDrag=useRef(null),ignoreClick=useRef(null);
+  const nodeDrag=useRef(null),ignoreClick=useRef(null),fileInput=useRef(null);
   graphRef.current = graph;
   useEffect(()=>{
     const cancel=()=>{finishMarquee(true);nodeDrag.current=null;drag.current=null;setMoving({});};
@@ -369,8 +370,24 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
     });
   }
   function exportTree() {
-    const blob = new Blob([JSON.stringify(graph, null, 2)], {type: 'application/json'}), url = URL.createObjectURL(blob);
-    const link = document.createElement('a'); link.href = url; link.download = `tree-chat-${graph.id}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setMenu(null);
+    return run(async()=>{
+      const bundle=await api({action:'export',sessionId});
+      const blob = new Blob([JSON.stringify(bundle)], {type: 'application/json'}), url = URL.createObjectURL(blob);
+      const name=(bundle.title||'对话').replace(/[\\/:*?"<>|\r\n]+/g,' ').trim().slice(0,60)||'对话';
+      const link = document.createElement('a'); link.href = url; link.download = `tree-chat-${name}.json`; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+  }
+  function importTree(file) {
+    if(!file)return;
+    return run(async()=>{
+      if(file.size>280*1024*1024)throw new Error('导入文件超过 280 MiB');
+      let bundle;try{bundle=JSON.parse(await file.text());}catch{throw new Error('所选文件不是有效的 JSON');}
+      const result=await api({action:'import',sessionId,bundle});
+      setSelectedIds([]);setSelected(result.graph.active);viewTouched.current=false;
+      pendingSelection={sessionId:result.sessionId,id:result.graph.active};
+      navigate(result,result.graph.active);
+    });
   }
   if (!graph) return h('div', {className: 'st-root st-loading', ref: panel}, h(Icon, {name: 'tree', size: 30}), h('p', null, error || '正在读取对话树…'), error && h(Button, {label: '重试', onClick: () => run(() => refresh()), children: '重试'}));
   const current = presentation.owners.get(currentNode(graph, sessionId)) ?? 'root', activePath = ancestors(graph, currentHead(graph,sessionId)), pathSet = new Set([...activePath.map(id=>presentation.owners.get(id)??id),current]);
@@ -395,6 +412,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
       h(Button,{icon:'arrange',label:'整理节点',disabled:busy,onClick:()=>{viewTouched.current=false;run(()=>mutate({type:'arrange',id:'root',includeInternal:showInternal}));}}),
       h('button',{type:'button',className:`st-button${projectSummary.error?' st-sync-error':''}`,'aria-label':'项目同步',title:projectSummary.error??'项目同步','aria-pressed':projectSummary.enabled,onClick:()=>setProjectDialog(true)},h(Icon,{name:'folder'})),
       h('button',{type:'button',className:'st-button','aria-label':'对话树选项','aria-haspopup':'menu','aria-expanded':menu?.kind==='global',onClick:e=>openMenu(e,'global')},h(Icon,{name:'more'}))),
+    h('input',{type:'file',ref:fileInput,accept:'.json,application/json',hidden:true,'aria-hidden':true,tabIndex:-1,onChange:e=>{const file=e.target.files?.[0];e.target.value='';importTree(file);}}),
     error && h('div', {className: 'st-error', role: 'alert'}, h('span', null, error), h(Button, {icon: 'close', label: '关闭提示', onClick: () => setError('')})),
     dirty && h('div', {className: 'st-notice'}, '上下文待应用'),
     h('div', {className: `st-canvas${lod?' st-lod':''}${Object.keys(moving).length?' st-node-dragging':''}${selectionBox?' st-box-select':''}`, ref: viewport, tabIndex: 0, 'aria-label': '对话树画布，左键或中键拖动空白平移，右键拖动空白框选，滚轮缩放', style:{'--st-zoom':view.zoom,backgroundSize:`${24*view.zoom}px ${24*view.zoom}px`,backgroundPosition:`${view.x}px ${view.y}px`},
@@ -488,7 +506,9 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
         h('button',{role:'menuitem',disabled:busy||!graph.canRedo,onClick:()=>run(()=>mutate({type:'redo'}))},h(Icon,{name:'redo'}),'重做',h('kbd',null,'Ctrl+Shift+Z')),
         h('hr'),h('button',{role:'menuitem',disabled:busy,onClick:()=>{viewTouched.current=false;run(()=>mutate({type:'arrange',id:'root',includeInternal:showInternal}));}},h(Icon,{name:'arrange'}),'整理节点'),
         h('button',{role:'menuitemcheckbox','aria-checked':showInternal,onClick:()=>{viewTouched.current=false;setShowInternal(!showInternal);persistCache(graph, selectedId, view, viewTouched.current, !showInternal);setMenu(null);}},h(Icon,{name:'layers'}),showInternal?'仅显示用户输入':'显示完整轮次'),
-        h('button',{role:'menuitem',onClick:()=>{exportTree();setMenu(null);}},h(Icon,{name:'download'}),'导出树结构'))
+        h('hr'),
+        h('button',{role:'menuitem',disabled:busy,onClick:exportTree},h(Icon,{name:'download'}),'导出对话…'),
+        h('button',{role:'menuitem',disabled:busy,onClick:()=>{setMenu(null);fileInput.current?.click();}},h(Icon,{name:'upload'}),'导入对话…'))
       :isGroup?h(React.Fragment,null,
         h('button',{role:'menuitem',disabled:busy,onClick:()=>toggleGroup(selectedId,false)},h(Icon,{name:'layers'}),'展开集合'),
         h('button',{role:'menuitem',onClick:()=>{setRename(node.label);setMenu(null);}},'重命名集合'),

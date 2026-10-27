@@ -12,6 +12,7 @@ import {fixture} from './fixtures.mjs';
 import {pluginRoot, resolveDshRuntime} from '../scripts/_env.mjs';
 import {ProjectSync} from '../src/host/project-sync.js';
 import {readArchive} from '../src/host/project-files.js';
+import {exportBundle,importBundle} from '../src/host/transfer.js';
 
 let runtimeDir = null;
 try {
@@ -259,6 +260,44 @@ test('项目同步：默认不写项目，完整往返集合/空枝/工具/文�
   const originalEmpty=destination.liveSessions.get('session-root').snapshotEvents(0);
   const migrated=await otherSync.import('session-root',project,status.treeId);assert.notEqual(migrated.graph.id,'session-root');assert.deepEqual(destination.liveSessions.get('session-root').snapshotEvents(0),originalEmpty,'另一宿主上同名空会话不能被覆盖');
   assert.equal(destination.liveSessions.get(migrated.graph.id).deriveMessages().filter(m=>m.role==='tool').length,1);
+});
+
+test('对话文件：导出含完整会话与附件的单个 JSON，另一宿主导入为新会话并可继续；旧版与损坏文件给出提示', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async t=>{
+  const {Session,TreeService,permissionSetters}=await loadHostModules();
+  await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
+  const host=createMockHost(Session,3,true),storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','bundle-state-')));
+  const file=Buffer.from('bundle attachment'),attachmentId='sha256:'+createHash('sha256').update(file).digest('hex'),ref={attachmentId,name:'notes.txt',bytes:file.length};
+  host.services.set('attachments',{async *readFileStream(){yield file;},async saveFile(){return {...ref};}});
+  host.appendUserTurn('session-root','问题 附件','user',[{type:'file',attachment:ref}]);
+  const service=new TreeService(host.ctx,storage,permissionSetters);
+  let graph=await service.get('session-root');
+  const ids=Object.values(graph.nodes).filter(n=>n.source).map(n=>n.id);
+  graph=await service.edit('session-root',graph.revision,{type:'group-create',ids:ids.slice(0,2),name:'导出集合'});
+  const branch=await service.branch('session-root',graph.revision,ids[1]);
+  const bundle=JSON.parse(JSON.stringify(await exportBundle(service,branch.sessionId)));
+  assert.equal(bundle.format,'tree-chat-bundle');assert.equal(Object.keys(bundle.sessions).length,2);assert.equal(bundle.assets.length,1);
+  assert.deepEqual(Buffer.from(bundle.assets[0].data,'base64'),file);
+
+  const destination=createMockHost(Session,0),saved=[];
+  destination.services.set('attachments',{async saveFile(input){saved.push(Buffer.from(input.data));return {...ref,attachmentId:'sha256:local'};}});
+  const other=new TreeService(destination.ctx,new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','bundle-other-'))),permissionSetters);
+  const before=destination.liveSessions.get('session-root').snapshotEvents(0);
+  const imported=await importBundle(other,'session-root',bundle);
+  assert.notEqual(imported.graph.id,'session-root');assert.deepEqual(destination.liveSessions.get('session-root').snapshotEvents(0),before,'导入不能改写当前会话');
+  assert.equal(Object.values(imported.graph.groups)[0].name,'导出集合');assert.ok(imported.graph.draftBranches);
+  assert.deepEqual(saved,[file]);
+  const root=await other.load(imported.graph.id);assert.equal(root.native.deriveMessages().filter(m=>m.role==='tool').length,1);
+  assert.ok(JSON.stringify(root.events).includes('sha256:local'),'附件引用改为本机附件');
+  const labels=Object.values(imported.graph.nodes).map(n=>n.label);for(const n of Object.values(graph.nodes))assert.ok(labels.includes(n.label));
+  destination.appendUserTurn(imported.graph.id,'问题 导入后继续');
+  assert.ok(Object.values((await other.get(imported.graph.id)).nodes).some(n=>n.label==='问题 导入后继续'));
+
+  await assert.rejects(importBundle(other,'session-root',{...bundle,assets:[{...bundle.assets[0],data:Buffer.from('x').toString('base64')}]}),/附件校验/);
+  await assert.rejects(importBundle(other,'session-root',{format:'something'}),/不是 tree-chat/);
+  const {sessions,...partial}=bundle;await assert.rejects(importBundle(other,'session-root',{...partial,sessions:{}}),/会话记录不完整/);
+  const legacy=JSON.parse(JSON.stringify(await service.get('session-root')));
+  await assert.rejects(importBundle(other,'session-root',legacy),/旧版/);
+  const copied=await importBundle(service,'session-root',legacy);assert.notEqual(copied.graph.id,graph.id,'同机旧版文件复制为新树');
 });
 
 test('项目同步：自动跟进完成消息、关闭不删文件、重启读取配置，外部编辑暂停且可另存副本', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async t=>{
