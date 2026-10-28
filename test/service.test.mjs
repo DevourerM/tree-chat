@@ -6,6 +6,7 @@ import {existsSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {TreeStorage} from '../src/host/storage.js';
+import {pathKey} from '../src/core/graph.js';
 import {conversationView} from '../src/core/presentation.js';
 import {layoutGraph} from '../src/core/layout.js';
 import {fixture} from './fixtures.mjs';
@@ -453,4 +454,47 @@ test('TreeService: 分阶段验证 internal 轮次先完成保留待输入节点
   assert.ok(promotedUserNode, '新分支真实用户节点必须入树');
   assert.equal(promotedUserNode.kind, 'user');
   assert.deepEqual(promotedUserNode.position, {x: 240, y: 310}, '转正后的真实用户节点必须继承最新拖动坐标');
+});
+
+test('TreeService: 删除当前枝梢节点后映射立即回落到上级，activate 交接新上下文并归档旧会话', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules();
+  await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
+  const host=createMockHost(Session,3),storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','service-rewind-'))),service=new TreeService(host.ctx,storage);
+  let graph=await service.get('session-root');
+  const head=graph.bindings['session-root'].head;
+  assert.equal(head,Object.values(graph.nodes).filter(n=>n.source).at(-1).id);
+  graph=await service.edit('session-root',graph.revision,{type:'delete',id:head});
+  const binding=graph.bindings['session-root'];
+  assert.ok(binding&&graph.nodes[binding.head],'删除枝梢后映射必须立即落到仍存在的上级节点');
+  assert.equal(binding.key,pathKey(graph,binding.head),'映射路径必须与新的树路径一致');
+  assert.equal(graph.active,binding.head);
+  const oldSeq=host.liveSessions.get('session-root').seq;
+  const rewound=await service.activate('session-root',graph.revision,binding.head);
+  assert.notEqual(rewound.sessionId,'session-root');
+  const after=await service.get(rewound.sessionId);
+  assert.equal(after.bindings['session-root'],undefined,'旧原生会话把树位置交给新上下文');
+  assert.ok(host.archived.has('session-root'),'旧原生会话归档，侧栏不残留');
+  const messages=host.liveSessions.get(rewound.sessionId).deriveMessages().filter(m=>m.role==='user');
+  assert.deepEqual(messages.map(m=>m.content[0].text),['问题 1','问题 2'],'新上下文只包含删除后的路径');
+  assert.equal(host.liveSessions.get('session-root').seq,oldSeq,'旧会话日志保持不动');
+});
+
+test('TreeService: 读取历史损坏对话树时自动回填悬空映射并标记待重连', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules();
+  await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
+  const host=createMockHost(Session,3),storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','service-heal-'))),service=new TreeService(host.ctx,storage);
+  const graph=await service.sync('session-root');
+  const nodes=Object.values(graph.nodes).filter(n=>n.source).map(n=>n.id);
+  const dangling=nodes.at(-1);
+  delete graph.nodes[dangling];
+  graph.active=nodes.at(-2);
+  graph.bindings['session-root'].head=dangling;
+  graph.revision+=1;
+  await storage.save(graph);
+  const healed=await service.get('session-root');
+  const binding=healed.bindings['session-root'];
+  assert.ok(healed.nodes[binding.head],'悬空映射恢复为仍存在的上级节点');
+  assert.equal(binding.head,nodes.at(-2));
+  assert.equal(binding.key,pathKey(healed,binding.head));
+  assert.equal(binding.rewind,true,'修复后的映射标记为待重连，下一次 activate 会重建上下文');
 });

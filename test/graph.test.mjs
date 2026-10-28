@@ -30,18 +30,26 @@ test('整枝删除保留其他枝，禁止删除根，版本冲突',()=>{
   assert.equal(Object.keys(edited.nodes).length,3);assert.equal(edited.active,'1');assert.ok(edited.nodes.side);
   assert.throws(()=>editGraph(graph,{type:'delete',id:'root'}));assert.throws(()=>assertRevision(graph,123));
 });
+export function chainOf(data) {
+  const graph=newGraph(data.header.id);
+  for(const t of turnsOf(data.events)) {const id=String(Object.keys(graph.nodes).length);graph.nodes[id]={id,parent:id==='1'?'root':String(Number(id)-1),label:t.label,source:{sessionId:graph.id,start:t.start,end:t.end},createdAt:t.createdAt};graph.active=id;}
+  return graph;
+}
 test('上下文仅包含新路径的轮次，并保留整组工具调用',async()=>{
-  const data=fixture(4,true), graph=editGraph(chain(),{type:'delete',id:'2'});let i=0;
+  const data=fixture(4,true), graph=editGraph(chainOf(data),{type:'delete',id:'2'});let i=0;
   const {seed}=await compilePath(graph,'4',async()=>data,()=>`new-msg-${++i}`);
   const users=seed.filter(e=>e.type==='user/message').map(e=>e.data.content[0].text);
   assert.deepEqual(users,['问题 1','问题 3','问题 4']);
   assert.equal(seed.filter(e=>e.type==='tool/result').length,1);
   assert.ok(seed.every((e,i)=>e.seq===i));
   assert.deepEqual(seed.filter(e=>e.type==='turn/start').map(e=>e.data.turn),[1,2,3,4]);
+  const call=seed.find(e=>e.type==='tool/call'), result=seed.find(e=>e.type==='tool/result');
+  assert.ok(call.seq<result.seq);
+  assert.equal(seed.find(e=>e.type==='turn/end'&&e.data.turn===3).seq>result.seq,true);
 });
 test('缺失工具结果时拒绝上下文，未完成轮次不进入树',async()=>{
   const data=fixture(4,true);data.surface=data.surface.filter(e=>e.type!=='tool/result');
-  await assert.rejects(()=>compilePath(chain(),'4',async()=>data,()=> 'new'),/未完成的工具/);
+  await assert.rejects(()=>compilePath(chainOf(data),'4',async()=>data,()=> 'new'),/未完成的工具/);
   assert.equal(turnsOf(data.events.slice(0,-1)).length,3);
 });
 test('历史分支继承该节点的工作目录，删除桥接和跨来源仍尊重路径末端，不带入未来变更',async()=>{
