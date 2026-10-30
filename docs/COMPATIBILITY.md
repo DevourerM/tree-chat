@@ -1,5 +1,15 @@
 # 宿主兼容性
 
+## tree-chat 1.3.1（2026-10-30）
+
+- 新增 Windows / DSH 0.2.1-rc.5 验证：67 项测试、真实 V4 会话重放和持久化关系检查通过；0.2.1-rc.3、0.2.1-rc.2 的宿主检查继续通过，0.2.0-rc.2 的既有兼容记录保留。
+- 原生 peerDependencies 显式加入 0.2.1-rc.5，并保留此前已验证版本。宿主启动门槛使用 `includePrerelease:true`，项目 `check:host` 使用默认 SemVer，两者都能接受这四个版本；未添加只认单一范围的 `engines.dsh`。
+- rc.5 与 rc.3 的宿主侧包除版本字符串外一致，变化集中在原生客户端的文案、提示和 reasoning 显示，不影响本插件使用的 Slot、Sidebar、Session、权限和压缩事务接口；本轮未改动宿主文件，也未修改插件数据格式。
+- 1.3.1 标准 `.tgz` 在空白 rc.5 profile 中通过原生界面安装并立即启用，重启后正常加载；实际安装版本与 `lib/client.js`、`lib/index.js` 哈希和测试源码一致。
+- rc.5 真实 Host 上对话树开枝/重接、原生模型上下文、实际 `/compact`、摘要与原文分枝、文件导入、失效摘要恢复和移除压缩回归通过。启动日志没有 tree-chat 的 incompatible/skipping 警告，GUI 无页面错误。
+
+复现命令、哈希与跳过范围见 [VALIDATION.md](VALIDATION.md)。
+
 ## tree-chat 1.3.0（2026-10-30）
 
 - Windows / DSH 0.2.1-rc.3、0.2.1-rc.2：各 67 项测试通过；0.2.0-rc.2：66 项通过，仅新版工作目录事件跳过。三版真实 V4 重放、持久化关系和工具配对检查通过。

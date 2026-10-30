@@ -30,7 +30,7 @@ try {
   const activated=page.waitForResponse(r=>r.url().includes('/api/conversation-tree')&&r.request().postDataJSON()?.action==='activate');
   await root.getByRole('button',{name:'删除并保留后续',exact:true}).click();
   const response=await activated, result=await response.json();assert.ok(response.ok(),JSON.stringify(result));
-  assert.equal(result.graph.bindings['session-tree-demo'].autoArchived,true,'root session must also be auto-archived when switching to active branch');
+  assert.equal(result.graph.bindings['session-tree-demo'],undefined,'a rewind replaces the old native context instead of keeping a stale mapping');
   assert.equal(result.graph.bindings[result.sessionId].autoArchived,false);
   console.log('Applied context to',result.sessionId);
   await waitNodes(4);
@@ -47,12 +47,14 @@ try {
   const branchResponse=page.waitForResponse(r=>r.url().includes('/api/conversation-tree')&&r.request().postDataJSON()?.action==='branch');
   await root.getByRole('button',{name:'节点操作',exact:true}).click();await root.getByRole('menuitem',{name:'新建分支',exact:true}).click();
   const branch=await(await branchResponse).json();assert.ok(branch.sessionId,JSON.stringify(branch));
-  assert.equal(branch.graph.bindings['session-tree-demo'].autoArchived,true);
+  assert.equal(branch.graph.bindings['session-tree-demo'],undefined,'the original tree context was already replaced by the rewind');
   assert.equal(branch.graph.bindings[result.sessionId].autoArchived,true);
   assert.equal(branch.graph.bindings[branch.sessionId].autoArchived,false);
   await root.locator('.st-pending.st-current .st-node-title').filter({hasText:'新分支'}).waitFor();
   await page.locator('[contenteditable=true]:visible').last().fill('分枝验证');await page.locator('[contenteditable=true]:visible').last().press('Enter');
   await page.getByText('上下文验证：问题 1',{exact:true}).first().waitFor({timeout:20000});
+  // The tree is reconciled by the host poll; wait for the pending draft to become a real node.
+  await root.locator('.st-pending').first().waitFor({state:'detached',timeout:20000});
   await waitNodes(6);
   assert.equal(await root.locator('.st-pending').count(),0);
   const branchRequest=JSON.parse(await readFile(join(artifactsDir,'last-model-request.json'),'utf8'));

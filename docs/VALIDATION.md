@@ -2,7 +2,18 @@
 
 本文件含早期版本的开发历史，预览和端口连线等旧交互已移除；当前操作以 [README](../README.md) 为准。0.2.1 发布审核及修复范围见 [RELEASE-AUDIT.md](RELEASE-AUDIT.md)。
 
-目标：Windows / DeepSeek Harness 0.2.0-rc.2、0.2.1-rc.2 与 0.2.1-rc.3，使用发行包中的真实 Session、持久化格式解释器和完整 Web Host。
+目标：Windows / DeepSeek Harness 0.2.0-rc.2、0.2.1-rc.2、0.2.1-rc.3 与 0.2.1-rc.5，使用发行包中的真实 Session、持久化格式解释器和完整 Web Host。
+
+## 1.3.1 / DSH 0.2.1-rc.5 适配（2026-10-30）
+
+- 本机官方安装包实际版本为 0.2.1-rc.5；从其 app.asar 解包的独立运行时（`research/compat-0.2.1-rc.5/dsh/node_modules`）报告 0.2.1-rc.5，未重启或改写日常 DSH，也未修改 app.asar。
+- `npm test`：67/67 通过（`DSH_DEV_RUNTIME` 指向 rc.5 运行时）；`npm run check:host`：三条原生检查通过（peer 预发布接纳、真实 V4 重放 1-3-4、自动轮次与工具配对）。同一命令对 rc.3、rc.2 运行时继续通过，说明新增范围未破坏旧版本。
+- `node scripts/install-smoke.mjs`：检查、安装、备份、卸载、旧名迁移、无备份重复更新三项通过；辅助安装器以携带 rc.5 版本元数据的 app.asar 夹具执行 `--check`，读取 dshVersion 0.2.1-rc.5 并通过已验证版本白名单。
+- `npm run pack:plugin`：标准包 26 个文件；`dist/tree-chat-1.3.1.tgz` SHA-256 `fbcad7878c5e2d4e8e6bd1c8de9a9feaba6ebad44275c8e406f40b6cc40a4cd9`；包内 `lib/client.js` SHA-256 `43ab35b3eedfa1823eb4fed258ff4f10d9fdbd8d006694dafa3b6b18746bc0e3`。
+- 隔离 rc.5 Host（`--profile web --host 127.0.0.1 --port 0 --no-open`，独立 DSH_HOME）：启动日志只有鉴权 URL，没有 tree-chat 的 incompatible/skipping 警告。`scripts/ui-install-test.mjs` 在空白 profile 中通过原生「插件 → 添加插件」安装 `dist/tree-chat-1.3.1.tgz` 并立即启用；实际安装为 1.3.1，安装后的 `lib/client.js`、`lib/index.js` 哈希与 dist 一致；重启该 profile 后插件管理界面正常列出 tree-chat，无页面错误。
+- `scripts/ui-test.mjs` 通过：删除节点 2 并保留后续后原生模型收到 1 → 3 → 4；从节点 1 新枝独立生长且旧枝归档。该脚本原先两处断言早于 1.2.3 的「新上下文接管树位置」语义（等待被替换的绑定仍带 autoArchived），且依赖 3 秒轮询前待输入节点已转正；本轮改为确认旧映射已移除并等待 pending 消失，修复后在 rc.5 和 rc.3 均通过。
+- `scripts/ui-compaction-test.mjs`（`TREE_COMPACTION_FIXTURE=1`）通过：真实 `/compact` 节点、原生摘要定位、原文/摘要分枝、完整对话文件导入后继续、删除前文后的失效摘要、应用当前路径、移除压缩及刷新不复活。
+- 所有隔离 Host 与浏览器已关闭；测试使用独立 DSH_HOME、合成历史和本地固定响应模型，不调用外部模型，不修改日常聊天。
 
 ## 1.3.0 上下文压缩（2026-10-30）
 
