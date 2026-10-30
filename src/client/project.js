@@ -10,7 +10,7 @@ function ProjectDialog({sessionId,ctx,onClose,onImported,onStatus}){
     h('div',{className:'st-project-heading'},h('strong',null,'项目同步'),h(Button,{icon:'close',label:'关闭项目同步',disabled:working,onClick:onClose})),
     h('label',null,'项目目录',h('div',{className:'st-project-path'},h('input',{'aria-label':'项目目录',value:directory,onChange:e=>{setDirectory(e.target.value);setStatus(null);setSelected('');setError('');},disabled:locked,placeholder:'项目文件夹的完整路径'}),h('button',{type:'button',disabled:locked,onClick:()=>perform(async()=>{const path=await ctx.uiWorkspace.pickDirectory();if(path)await inspect(path);})},'选择…'),h('button',{type:'button',disabled:locked||!directory.trim(),onClick:()=>perform(()=>inspect(directory))},'读取'))),
     h('p',{className:'st-project-note'},'保存到 .tree-chat/，包含对话、工具结果与附件，可随 Git 管理。'),
-    status?.waiting&&h('p',{className:'st-project-note'},'当前生成完成后自动同步。'),
+    status?.waiting&&h('p',{className:'st-project-note'},'当前生成或压缩结束后自动同步。'),
     (error||status?.error)&&h('div',{role:'alert',className:'st-project-warning'},error||status.error),
     h('div',{className:'st-dialog-actions'},h('button',{type:'button',disabled:locked||!directory.trim(),onClick:()=>perform(()=>configure(!status?.enabled))},status?.enabled?'停止同步':'开启同步'),
       status?.enabled&&h('button',{type:'button',disabled:locked,onClick:()=>perform(()=>configure(true))},'立即同步'),

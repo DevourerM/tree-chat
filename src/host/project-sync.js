@@ -43,7 +43,7 @@ export class ProjectSync {
     const graph=await this.service.sync(sessionId),link=await this.link(graph.id);
     const root=await projectRoot(directory??link?.root??await this.defaultRoot(sessionId));
     const records=await listProjectTrees(root);
-    const enabled=Boolean(link?.enabled&&link.root===root),waiting=enabled&&Object.keys(graph.bindings).some(s=>this.ctx.agents.get(s)?.status==='running');
+    const enabled=Boolean(link?.enabled&&link.root===root),waiting=enabled&&this.service.isBusy(graph);
     return {root,enabled,waiting,treeId:link?.root===root?link.treeId:null,error:this.errors.get(graph.id)??null,records};
   }
   async configure(sessionId,directory,enabled,asCopy=false){
@@ -54,7 +54,7 @@ export class ProjectSync {
     if(!link||link.root!==root||asCopy)link={root,treeId:`tree-${randomUUID()}`,enabled:true,sessionMap:{},snapshot:null};
     else link={...link,enabled:true};
     await this.saveLink(graph.id,link);this.errors.delete(graph.id);
-    if(Object.keys(graph.bindings).some(s=>this.ctx.agents.get(s)?.status==='running')){this.schedule(graph.id);return this.status(sessionId,root);}
+    if(this.service.isBusy(graph)){this.schedule(graph.id);return this.status(sessionId,root);}
     try{await this.write(graph.id,true);}catch(e){this.errors.set(graph.id,e.message);throw new TreeError(e.message,409);}
     return this.status(sessionId,root);
   }
@@ -63,7 +63,7 @@ export class ProjectSync {
     const link=await this.link(id);if(!link?.enabled)return;
     if(this.writing.has(id))return;
     const graph=await this.service.storage.read(id);if(!graph)throw Error('找不到需要同步的树');
-    if(Object.keys(graph.bindings).some(s=>this.ctx.agents.get(s)?.status==='running')){if(manual)throw new TreeError('请等待这棵树中的生成完成后再同步',409);this.schedule(id);return;}
+    if(this.service.isBusy(graph)){if(manual)throw new TreeError('请等待这棵树中的生成或上下文压缩完成后再同步',409);this.schedule(id);return;}
     this.writing.add(id);
     try{
       // Catch up completed rounds in every binding, including branches whose panel is closed.

@@ -135,6 +135,8 @@ test('压缩/裁剪把工具结果追加到后面的轮次时，种子仍把调�
   const resultIndex = seed.findIndex(e => e.type === 'tool/result' && e.data.message.toolCallId === 'call-1');
   assert.ok(callIndex >= 0 && resultIndex > callIndex);
   assert.equal(seed[resultIndex].data.message.content[0].text, '被裁剪的结果 1');
+  const historical=await compilePath(graphOf(data),'1',async()=>data);
+  assert.equal(historical.seed.find(e=>e.type==='tool/result').data.message.content[0].text,'结果 1','later pruning does not change an earlier historical branch');
   assert.ok(seed.findIndex((e, i) => i > resultIndex && e.type === 'turn/end') > resultIndex);
 });
 
@@ -159,7 +161,7 @@ test('连续替换（替换再被替换）仍按最初的轮次归属', {skip}, 
   assert.equal(seed.find(e => e.type === 'tool/result' && e.data.message.toolCallId === 'call-1').data.message.content[0].text, '第二次裁剪');
 });
 
-test('跨轮压缩摘要被放回它替代的历史位置之前，而不是落在产生摘要的轮次', {skip}, async () => {
+test('未选择压缩节点时不从当前视图借入后来生成的摘要，保留原始历史', {skip}, async () => {
   const source = builder();
   source.turn(1, {tools: false});
   source.turn(2, {tools: false});
@@ -175,9 +177,8 @@ test('跨轮压缩摘要被放回它替代的历史位置之前，而不是落�
   const {seed} = await compilePath(graphOf(data), '3', async () => data);
   await assertNativeSeed(seed, data.header);
   const users = seed.filter(e => e.type === 'user/message').map(e => e.data.content[0].text);
-  assert.deepEqual(users, ['压缩摘要', '问题 2', '问题 3']);
-  // The summary stands before the turns it summarizes and cannot be duplicated.
-  assert.equal(seed.filter(e => e.data?.content?.[0]?.text === '压缩摘要').length, 1);
+  assert.deepEqual(users, ['问题 1', '问题 2', '问题 3']);
+  assert.equal(seed.filter(e => e.data?.content?.[0]?.text === '压缩摘要').length, 0);
 });
 
 test('路径跨会话时每个来源各自归位，种子仍通过原生校验', {skip}, async () => {

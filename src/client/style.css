@@ -62,6 +62,9 @@
   background:var(--st-soft)
 }
 .st-root .st-node-body { cursor:grab }
+.st-root .st-node-body.st-compaction {display:flex;align-items:center;gap:7px}
+.st-root .st-compaction>svg {flex:none;color:var(--st-secondary)}
+.st-root .st-compaction-stale {color:var(--st-secondary)}
 .st-root .st-node-body:active,.st-root .st-node-dragging { cursor:grabbing }
 .st-root .st-node.st-moving { z-index:5; transition:none; box-shadow:0 0 0 3px var(--st-soft),0 8px 24px #00000018 }
 .st-root .st-labeled {
@@ -136,6 +139,7 @@ no duplicate panel heading. */
   overflow-wrap:anywhere
 }
 .st-root .st-notice {
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
   background:color-mix(in srgb,#cf9c42 9%,var(--st-bg))
 }
 /* World coordinates stay stable across zoom and level-of-detail changes. */

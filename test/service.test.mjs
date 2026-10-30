@@ -6,12 +6,14 @@ import {existsSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {TreeStorage} from '../src/host/storage.js';
-import {pathKey} from '../src/core/graph.js';
+import {pathKey,editGraph} from '../src/core/graph.js';
 import {conversationView} from '../src/core/presentation.js';
 import {layoutGraph} from '../src/core/layout.js';
-import {fixture} from './fixtures.mjs';
+import {fixture,compactFixture} from './fixtures.mjs';
 import {pluginRoot, resolveDshRuntime} from '../scripts/_env.mjs';
 import {ProjectSync} from '../src/host/project-sync.js';
+import {compactionsOf} from '../src/host/compaction.js';
+import {compilePath,turnsOf} from '../src/host/context.js';
 import {readArchive} from '../src/host/project-files.js';
 import {exportBundle,importBundle} from '../src/host/transfer.js';
 
@@ -497,4 +499,88 @@ test('TreeService: 读取历史损坏对话树时自动回填悬空映射并标�
   assert.equal(binding.head,nodes.at(-2));
   assert.equal(binding.key,pathKey(healed,binding.head));
   assert.equal(binding.rewind,true,'修复后的映射标记为待重连，下一次 activate 会重建上下文');
+});
+
+function compactLive(session,options){
+  const data={events:session.snapshotEvents(0).map(e=>structuredClone(e))},from=data.events.length;compactFixture(data,options);
+  for(const e of data.events.slice(from))session.append(e.type,e.data,e.surfaceOp?{surfaceOp:e.surfaceOp,sourceEventSeqs:e.sourceEventSeqs}:undefined);
+}
+test('TreeService: 手动压缩无新对话也同步出节点，历史分支用原文，压缩分支只带摘要，删除后不复活',{skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules(),host=createMockHost(Session,4,true);
+  const storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','service-compaction-'))),service=new TreeService(host.ctx,storage);
+  let graph=await service.sync('session-root');const oldHead=graph.active,session=host.liveSessions.get('session-root');
+  compactLive(session,{id:'manual'});await service.syncCompaction(session.id);graph=await service.sync(session.id);
+  const checkpoint=Object.values(graph.nodes).find(n=>n.kind==='compaction');assert.ok(checkpoint);assert.equal(checkpoint.parent,oldHead);assert.equal(graph.bindings[session.id].head,checkpoint.id);
+  const after=await service.branch(session.id,graph.revision,checkpoint.id);assert.deepEqual(host.liveSessions.get(after.sessionId).deriveMessages().filter(m=>m.role==='user').map(m=>m.content[0].text),['摘要 manual','问题 3','问题 4']);
+  graph=await service.sync(session.id);const before=await service.branch(session.id,graph.revision,oldHead);assert.deepEqual(host.liveSessions.get(before.sessionId).deriveMessages().filter(m=>m.role==='user').map(m=>m.content[0].text),['问题 1','问题 2','问题 3','问题 4']);
+  graph=await service.sync(session.id);await service.cancelBranch(session.id,graph.revision,`pending:${after.sessionId}`);
+  graph=await service.sync(session.id);await service.edit(session.id,graph.revision,{type:'delete',id:checkpoint.id});graph=await service.sync(session.id);assert.ok(!graph.nodes[checkpoint.id]);
+});
+test('TreeService: 压缩进行中不能开枝或修改上下文，即使原生 agent 显示 idle',{skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules(),host=createMockHost(Session,3);
+  const service=new TreeService(host.ctx,new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','service-compaction-lock-'))));
+  const graph=await service.sync('session-root'),session=host.liveSessions.get('session-root');session.append('compaction/start',{compactionId:'active',turn:null});
+  assert.equal(host.agents.get('session-root').status,'idle');
+  await assert.rejects(service.branch(session.id,graph.revision,graph.active),/压缩/);
+  await assert.rejects(service.edit(session.id,graph.revision,{type:'delete',id:graph.active}),/压缩/);
+  assert.equal(Object.values((await service.sync(session.id)).nodes).filter(n=>n.kind==='compaction').length,0);
+});
+test('TreeService: 已存在的旧树回填历史压缩位置，保留压缩前侧枝且避免重复记录',{skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules(),host=createMockHost(Session,4);
+  const storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','service-compaction-upgrade-'))),service=new TreeService(host.ctx,storage);
+  let graph=await service.sync('session-root');const source=host.liveSessions.get('session-root'),prior=graph.active;
+  const side=await service.branch(source.id,graph.revision,prior);compactLive(source,{id:'old'});host.appendUserTurn(source.id,'压缩后继续');graph=await service.sync(source.id);
+  const checkpoint=Object.values(graph.nodes).find(n=>n.kind==='compaction'),following=Object.values(graph.nodes).find(n=>n.label==='压缩后继续');
+  // Model an old plugin that advanced past the compaction but did not record its checkpoint.
+  following.parent=prior;delete graph.nodes[checkpoint.id];delete graph.bindings[source.id].compactionSeen;
+  const members=Object.values(graph.nodes).filter(n=>n.kind==='user').map(n=>n.id);graph=editGraph(graph,{type:'group-create',ids:members,name:'旧版集合'});await storage.save(graph);
+  const upgraded=await new TreeService(host.ctx,storage).sync(source.id);assert.equal(upgraded.nodes[checkpoint.id].parent,prior);assert.equal(upgraded.nodes[following.id].parent,checkpoint.id);
+  assert.equal(upgraded.draftBranches[side.sessionId].parent,prior);
+  assert.ok(Object.values(upgraded.groups)[0].nodeIds.includes(checkpoint.id),'a checkpoint inserted inside a collection must preserve its connected membership');
+  const again=await service.sync(source.id);assert.equal(Object.values(again.nodes).filter(n=>n.kind==='compaction').length,1);
+});
+test('压缩检查点随完整文件导入到新宿主，恢复后建立分支仍只使用正确摘要',{skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules(),origin=createMockHost(Session,4,true);
+  const service=new TreeService(origin.ctx,new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','compaction-export-'))));
+  await service.sync('session-root');compactLive(origin.liveSessions.get('session-root'),{id:'portable'});await service.syncCompaction('session-root');
+  const bundle=await exportBundle(service,'session-root'),target=createMockHost(Session,1);
+  const restoredService=new TreeService(target.ctx,new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','compaction-import-'))));
+  const restored=await importBundle(restoredService,'session-root',bundle),node=Object.values(restored.graph.nodes).find(n=>n.kind==='compaction');
+  assert.ok(node);assert.equal(node.compaction.prefixKey,pathKey(restored.graph,node.parent));
+  const activated=await restoredService.activate(restored.sessionId,restored.graph.revision,node.id,true);
+  assert.deepEqual(target.liveSessions.get(activated.sessionId).deriveMessages().filter(m=>m.role==='user').map(m=>m.content[0].text),['摘要 portable','问题 3','问题 4']);
+});
+test('旧导出遗漏压缩节点与重建标记时，导入先校验摘要覆盖并重建，不能带回已删历史',{skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules(),origin=createMockHost(Session,4,true);
+  const storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','compaction-legacy-'))),service=new TreeService(origin.ctx,storage);
+  let graph=await service.sync('session-root');const first=Object.values(graph.nodes).find(n=>n.label==='问题 1');
+  compactLive(origin.liveSessions.get('session-root'),{id:'legacy'});graph=await service.sync('session-root');graph=await service.edit('session-root',graph.revision,{type:'delete',id:first.id});
+  const bundle=await exportBundle(service,'session-root');assert.equal(bundle.graph.bindings['session-root'].rewind,true,'native rebuild state is portable, not a local-only flag');
+  const cp=Object.values(bundle.graph.nodes).find(n=>n.kind==='compaction'),parent=cp.parent;
+  delete bundle.graph.nodes[cp.id];bundle.graph.active=parent;const binding=bundle.graph.bindings['session-root'];binding.head=parent;binding.key=pathKey(bundle.graph,parent);delete binding.rewind;delete binding.compactionSeen;
+  const target=createMockHost(Session,1),importer=new TreeService(target.ctx,new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','compaction-legacy-import-'))));
+  const restored=await importBundle(importer,'session-root',bundle);
+  assert.deepEqual(target.liveSessions.get(restored.sessionId).deriveMessages().filter(m=>m.role==='user').map(m=>m.content[0].text),['问题 2','问题 3','问题 4']);
+  const invalid=Object.values(restored.graph.nodes).find(n=>n.kind==='compaction');assert.equal(invalid.compaction.prefixKey,null);
+  assert.ok(!restored.graph.bindings[restored.sessionId].rewind);
+});
+test('旧版已把摘要复制到新会话且原会话解绑时，恢复压缩节点；删除后不因另一旧枝而复活',{skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules();
+  for(const removedFirst of [false,true]){
+    const host=createMockHost(Session,4,true),storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','compaction-flat-'))),service=new TreeService(host.ctx,storage);
+    const initial=await service.sync('session-root'),oldHead=initial.active;compactLive(host.liveSessions.get('session-root'),{id:'flat'});
+    const current=await service.sync('session-root'),checkpoint=Object.values(current.nodes).find(n=>n.kind==='compaction');
+    const {seed}=await compilePath(current,checkpoint.id,id=>service.load(id));
+    function oldFork(id,text){const session=Session.create(id,seed,{...host.liveSessions.get('session-root').header,id,isSeeded:true},seed.length,[]);host.liveSessions.set(id,session);host.agents.set(id,{session,status:'idle'});host.appendUserTurn(id,text);const turn=turnsOf(session.snapshotEvents(0)).at(-1);return {id:`${id}:own`,parent:oldHead,label:text,kind:'user',createdAt:1,source:{sessionId:id,start:turn.start,end:turn.end}};}
+    let graph=structuredClone(initial);delete graph.bindings['session-root'];
+    if(removedFirst){const first=Object.values(graph.nodes).find(n=>n.label==='问题 1');graph=editGraph(graph,{type:'delete',id:first.id});}
+    const own=oldFork('session-flat','问题 旧枝');graph.nodes[own.id]=own;graph.active=own.id;graph.bindings['session-flat']={head:own.id,key:pathKey(graph,own.id),seen:host.liveSessions.get('session-flat').seq-1};await storage.save(graph);
+    graph=await service.sync('session-flat');const recovered=Object.values(graph.nodes).find(n=>n.kind==='compaction');assert.ok(recovered);assert.equal(recovered.source.sessionId,'session-root');assert.equal(graph.nodes[own.id].parent,recovered.id);
+    assert.equal(Boolean(graph.bindings['session-flat'].rewind),removedFirst);
+    if(removedFirst){assert.equal(recovered.compaction.prefixKey,null);continue;}
+    const replay=await compilePath(graph,own.id,id=>service.load(id));assert.deepEqual(replay.seed.filter(e=>e.type==='user/message').map(e=>e.data.content[0].text),['摘要 flat','问题 3','问题 4','问题 旧枝']);
+    await service.edit('session-flat',graph.revision,{type:'delete',id:recovered.id});graph=await storage.read(graph.id);
+    const other=oldFork('session-flat-other','问题 另一旧枝');graph.nodes[other.id]=other;graph.bindings['session-flat-other']={head:other.id,key:pathKey(graph,other.id),seen:host.liveSessions.get('session-flat-other').seq-1};await storage.save(graph);
+    const reread=await service.sync('session-flat-other');assert.equal(Object.values(reread.nodes).filter(n=>n.kind==='compaction').length,0);assert.equal(reread.bindings['session-flat-other'].rewind,true);
+  }
 });

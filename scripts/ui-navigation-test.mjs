@@ -115,16 +115,16 @@ try {
   const undoEdit = response('edit'), undoActivate = response('activate');
   await root.getByRole('menuitem', {name: /撤销/}).click();
   await undoEdit;
-  await undoActivate;
+  const restored = await (await undoActivate).json();
   await waitNodes(5);
   await waitIdle();
 
   locating = response('locate');
   await node('问题 2').dblclick();
   location = await (await locating).json();
-  assert.equal(location.sessionId, 'session-tree-demo');
-  assert.equal(location.turn, 2);
-  await landed(2);
+  assert.equal(location.sessionId, restored.sessionId);
+  assert.equal(location.turn, 3, 'restored context has its own baseline turn before the original messages');
+  await landed(3);
 
   assert.equal(requests.filter(r => r.action === 'activate').length, 2, 'only explicit context edits may activate a branch');
   assert.equal(requests.filter(r => r.action === 'preview').length, 0);

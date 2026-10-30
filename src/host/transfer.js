@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {validateGraph,publicGraph,pathKey,TreeError} from '../core/graph.js';
+import {validateGraph,publicGraph,pathKey,pathTo,TreeError} from '../core/graph.js';
 import {digest,validId,mapGraph,archiveSession,parseSession,attachmentRefs,localizeSession} from './project-format.js';
 
 export const BUNDLE_FORMAT='tree-chat-bundle';
@@ -68,12 +68,17 @@ export async function restoreTree(service,sessionId,{portable,sessions,assetByte
       });handles.push(handle);
       if(graph.bindings[mapping[id]])graph.bindings[mapping[id]].seen=handle.agent.session.seq-1;
     }
+    service.repair(graph);
+    const owner=Object.entries(graph.bindings).find(([,b])=>b.head===graph.active&&b.key===pathKey(graph,graph.active))?.[0]??graph.id;
+    for(const id of Object.keys(graph.bindings))await service.syncSessionTurns(graph,id,undefined,id===owner);
+    for(const b of Object.values(graph.bindings))if(pathTo(graph,b.head).some(n=>n.kind==='compaction'&&n.compaction.prefixKey!==pathKey(graph,n.parent)))b.rewind=true;
     const registry=ctx.get('workspaceRegistry');const workspace=registry?await registry.resolveByPath(root)??await registry.create(root):null;
     await service.storage.save(graph);
     await afterSave?.(graph,mapping);
     if(workspace)for(const sid of Object.keys(graph.bindings))await workspace.attachSession(sid);
     const selected=Object.entries(graph.bindings).find(([,b])=>b.head===graph.active&&b.key===pathKey(graph,graph.active))?.[0]??graph.id;
     await service.shelve(graph,selected);
+    if(graph.bindings[selected]?.rewind)return await service.activate(selected,graph.revision,graph.bindings[selected].head,false,true);
     return {sessionId:selected,graph:publicGraph(graph)};
   }catch(e){for(const h of handles.reverse())await h.dispose?.().catch(()=>{});throw e;}
 }
@@ -85,7 +90,7 @@ async function workspaceRoot(service,sessionId,graph){
 /** A single self-contained JSON file: tree, full session event logs and attachments. */
 export async function exportBundle(service,sessionId){
   const graph=await service.sync(sessionId);
-  if(Object.keys(graph.bindings).some(s=>service.ctx.agents.get(s)?.status==='running'))throw new TreeError('请等待这棵树中的生成完成后再导出',409);
+  if(service.isBusy(graph))throw new TreeError('请等待这棵树中的生成或上下文压缩完成后再导出',409);
   let changed=false;
   for(const sid of Object.keys(graph.bindings))changed=(await service.syncSessionTurns(graph,sid,undefined,sid===sessionId))||changed;
   if(changed){graph.revision++;graph.undo=[];graph.redo=[];await service.storage.save(graph);}

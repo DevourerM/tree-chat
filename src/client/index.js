@@ -19,6 +19,7 @@ const icons = {
   download: 'M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4',
   upload: 'M12 15V3M7 8l5-5 5 5M4 17v4h16v-4',
   layers: 'm12 3 10 5-10 5L2 8zm-9 9 9 5 9-5m-18 5 9 5 9-5',
+  compress: 'M4 3h16M4 21h16m-8-17v6m-4-3 4 4 4-4m-4 13v-6m-4 3 4-4 4 4',
   expandAll: 'm7 8 5-5 5 5M12 3v7m-5 6 5 5 5-5m-5 5v-7M3 12h18',
   collapseAll: 'm7 3 5 5 5-5M12 8V1m-5 20 5-5 5 5m-5-5v7M3 12h18',
   folder: 'M3 7V4h6l2 3h10v13H3zM7 13h10m-3-3 3 3-3 3',
@@ -236,6 +237,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
     try { await navigation.compose(result.sessionId); } catch (e) { if (e.name !== 'AbortError') throw e; }
   }
   const activate = () => {setMenu(null);return run(async () => compose(await api({action: 'activate', sessionId, revision: graphRef.current.revision, id: targetId})));};
+  const applyCurrent=()=>run(async()=>{const current=graphRef.current;await compose(await api({action:'activate',sessionId,revision:current.revision,id:currentHead(current,sessionId),rewind:true}));});
   function createBranch(id=selectedId){
     if(Object.hasOwn(graphRef.current.groups??{},id))return toggleGroup(id,false);
     setMenu(null);
@@ -396,15 +398,15 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   }
   if (!graph) return h('div', {className: 'st-root st-loading', ref: panel}, h(Icon, {name: 'tree', size: 30}), h('p', null, error || '正在读取对话树…'), error && h(Button, {label: '重试', onClick: () => run(() => refresh()), children: '重试'}));
   const current = presentation.owners.get(currentNode(graph, sessionId)) ?? 'root', activePath = ancestors(graph, currentHead(graph,sessionId)), pathSet = new Set([...activePath.map(id=>presentation.owners.get(id)??id),current]);
-  const node = presentation.graph.nodes[selectedId], selectedPath = ancestors(graph, targetId), connected = selectedPath[0] === 'root', isDraft=node?.kind==='pending',isGroup=node?.kind==='group';
+  const node = presentation.graph.nodes[selectedId], selectedPath = ancestors(graph, targetId), connected = selectedPath[0] === 'root', isDraft=node?.kind==='pending',isGroup=node?.kind==='group',isCompaction=node?.kind==='compaction';
   const membership=presentation.groupMembership.get(selectedId),memberGroup=graph.groups?.[membership];
   const groupCandidate=selectedIds.length>=2?validateGroupCandidate(presentation.graph.nodes,selectedIds):{ok:false};
   const hasRealChild = Object.values(presentation.graph.nodes).some(n => n.parent === selectedId && n.kind !== 'pending');
   const leaf = node && !isDraft && !hasRealChild;
-  const dirty = activePath.join('/') !== graph.bindings[sessionId]?.key;
+  const dirty = graph.bindings[sessionId]?.rewind||activePath.join('/') !== graph.bindings[sessionId]?.key;
   const lod = view.zoom < .6;
   const hasGroups=Object.keys(graph.groups??{}).length>0,hasCollapsed=Object.values(graph.groups??{}).some(g=>g.collapsed);
-  return h('section', {className: 'st-root', ref: panel, 'data-size': size, 'aria-label': 'tree-chat 对话管理', 'aria-busy': busy, onPointerDown:e=>{if(menu&&!e.target.closest('.st-node-menu'))setMenu(null);}, onKeyDown: e => {
+  return h('section', {className: 'st-root', ref: panel, 'data-size': size,'data-session-id':sessionId, 'aria-label': 'tree-chat 对话管理', 'aria-busy': busy, onPointerDown:e=>{if(menu&&!e.target.closest('.st-node-menu'))setMenu(null);}, onKeyDown: e => {
     if (e.target.matches('input,textarea,select,[contenteditable=true]')&&e.key!=='Escape') return;
     if(e.code==='Space'&&e.target.matches('.st-canvas,.st-node-body'))e.preventDefault();
     if (e.key === 'Escape') {if(nodeDrag.current)ignoreClick.current={id:nodeDrag.current.id,until:Date.now()+400};nodeDrag.current=null;finishMarquee(true);drag.current=null;setMoving({});setConfirm(null);setRename(null);setGroupDialog(null);setMenu(null);navigation.cancel();}
@@ -419,7 +421,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
       h('button',{type:'button',className:'st-button','aria-label':'对话树选项','aria-haspopup':'menu','aria-expanded':menu?.kind==='global',onClick:e=>openMenu(e,'global')},h(Icon,{name:'more'}))),
     h('input',{type:'file',ref:fileInput,accept:'.json,application/json',hidden:true,'aria-hidden':true,tabIndex:-1,onChange:e=>{const file=e.target.files?.[0];e.target.value='';importTree(file);}}),
     error && h('div', {className: 'st-error', role: 'alert'}, h('span', null, error), h(Button, {icon: 'close', label: '关闭提示', onClick: () => setError('')})),
-    dirty && h('div', {className: 'st-notice'}, '上下文待应用'),
+    dirty && h('div', {className: 'st-notice'}, h('span',null,'上下文待应用'),h(Button,{label:'应用当前路径',disabled:busy,onClick:applyCurrent,children:'应用当前路径'})),
     h('div', {className: `st-canvas${lod?' st-lod':''}${Object.keys(moving).length?' st-node-dragging':''}${selectionBox?' st-box-select':''}`, ref: viewport, tabIndex: 0, 'aria-label': '对话树画布，左键或中键拖动空白平移，右键拖动空白框选，滚轮缩放', style:{'--st-zoom':view.zoom,backgroundSize:`${24*view.zoom}px ${24*view.zoom}px`,backgroundPosition:`${view.x}px ${view.y}px`},
       onContextMenu:e=>{if(!e.target.closest('.st-node'))e.preventDefault();},
       onKeyDown: e => {
@@ -484,9 +486,10 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
             return h('path', {key:p.node.id,d,className:`st-wire${pathSet.has(p.node.id)?' st-wire-active':''}`});
           })),
         ...renderNodes.map(p => {
-          const n=p.node, label=n.id==='root'&&n.label==='对话起点'?'起点':n.label, match=!query || n.label.toLowerCase().includes(query.toLowerCase());
+          const n=p.node,stale=n.kind==='compaction'&&ancestors(graph,n.parent).join('/')!==n.compaction?.prefixKey;
+          const label=(n.id==='root'&&n.label==='对话起点'?'起点':n.label)+(stale?' · 已失效':''), match=!query || n.label.toLowerCase().includes(query.toLowerCase());
           return h('article', {key:n.id, 'data-node-id':n.id, className:`st-node${n.id==='root'?' st-origin':''}${n.kind==='pending'?' st-pending':''}${n.kind==='group'?' st-group':''}${n.id===selectedId||selectedIds.includes(n.id)?' st-selected':''}${moving[n.id]?' st-moving':''}${pathSet.has(n.id)?' st-onpath':''}${n.id===current?' st-current':''}${n.parent===null&&n.id!=='root'?' st-detached':''}${!match?' st-dim':''}`, style:{left:p.cx,top:p.cy,'--node-w':`${p.width}px`,'--node-h':`${p.height}px`}, title:n.kind==='group'?`${n.label} · ${n.count} 个节点`:n.kind==='pending'?'新分支':n.id==='root'?'对话起点':`${n.label}\n第 ${p.depth} 轮 · ${new Date(n.createdAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}${n.parent===null?' · 未连接':''}`, onClick:e=>handleNodeClick(e,n.id), onDoubleClick:e=>handleNodeDoubleClick(e,n.id), onContextMenu:e=>openMenu(e,n.id)},
-            h('button',{className:'st-node-body', onPointerDown:e=>beginNode(e,n.id), onClick:e=>handleNodeClick(e,n.id), onDoubleClick:e=>handleNodeDoubleClick(e,n.id), 'aria-label':n.label, 'aria-pressed':n.id===selectedId},h('span',{className:'st-node-title'},label)),
+            h('button',{className:`st-node-body${n.kind==='compaction'?' st-compaction':''}${stale?' st-compaction-stale':''}`,title:n.kind==='compaction'?(stale?'历史路径已改变，继续时将使用当前路径的原文':'双击查看 DSH 原生压缩摘要'):undefined, onPointerDown:e=>beginNode(e,n.id), onClick:e=>handleNodeClick(e,n.id), onDoubleClick:e=>handleNodeDoubleClick(e,n.id), 'aria-label':n.label, 'aria-pressed':n.id===selectedId},n.kind==='compaction'&&h(Icon,{name:'compress',size:14}),h('span',{className:'st-node-title'},label)),
             n.kind==='group'&&h('span',{className:'st-group-count','aria-label':`${n.count} 个节点`},n.count),
             presentation.groupMembership.get(n.id)&&h('button',{className:'st-group-tag',title:`折叠集合：${graph.groups[presentation.groupMembership.get(n.id)].name}`,'aria-label':`折叠集合：${graph.groups[presentation.groupMembership.get(n.id)].name}`,onPointerDown:e=>e.stopPropagation(),onClick:e=>{e.stopPropagation();toggleGroup(presentation.groupMembership.get(n.id),true);}},graph.groups[presentation.groupMembership.get(n.id)].name),
             h('div',{className:'st-node-controls'},n.kind==='group'
@@ -524,6 +527,11 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
         h('button',{role:'menuitem',disabled:busy,onClick:()=>createBranch()},h(Icon,{name:'play'}),'继续分支'),
         h('button',{role:'menuitem',onClick:()=>{setRename(node.label);setMenu(null);}},'重命名节点'),
         h('button',{role:'menuitem',className:'st-danger',disabled:busy,onClick:()=>cancelBranch()},h(Icon,{name:'trash'}),'删除空分支'))
+      :isCompaction?h(React.Fragment,null,
+        h('button',{role:'menuitem',disabled:busy||!connected,onClick:()=>createBranch()},h(Icon,{name:'plus'}),'新建分支'),
+        leaf&&selectedId!==current&&h('button',{role:'menuitem',disabled:busy||!connected,onClick:activate},h(Icon,{name:'play'}),'继续这条分支'),
+        h('button',{role:'menuitem',onClick:()=>{setRename(node.label);setMenu(null);}},'重命名节点'),
+        h('button',{role:'menuitem',disabled:busy,onClick:()=>run(()=>mutate({type:'delete',id:selectedId}))},h(Icon,{name:'undo'}),'移除压缩，使用原文'))
       :h(React.Fragment,null,
         h('button',{role:'menuitem',disabled:busy||!connected,onClick:()=>createBranch()},h(Icon,{name:'plus'}),'新建分支'),
         leaf&&selectedId!==current&&h('button',{role:'menuitem',disabled:busy||!connected,onClick:activate},h(Icon,{name:'play'}),'继续这条分支'),

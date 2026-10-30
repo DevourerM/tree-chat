@@ -48,7 +48,7 @@ test('上下文仅包含新路径的轮次，并保留整组工具调用',async(
   assert.equal(seed.find(e=>e.type==='turn/end'&&e.data.turn===3).seq>result.seq,true);
 });
 test('缺失工具结果时拒绝上下文，未完成轮次不进入树',async()=>{
-  const data=fixture(4,true);data.surface=data.surface.filter(e=>e.type!=='tool/result');
+  const data=fixture(4,true);data.events=data.events.filter(e=>e.type!=='tool/result');data.events.forEach((e,i)=>e.seq=i);data.surface=data.events.filter(e=>e.surfaceOp);
   await assert.rejects(()=>compilePath(chainOf(data),'4',async()=>data,()=> 'new'),/未完成的工具/);
   assert.equal(turnsOf(data.events.slice(0,-1)).length,3);
 });

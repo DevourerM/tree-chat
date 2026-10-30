@@ -42,6 +42,10 @@ export function createChatNavigator(ctx, headers) {
     const scope=`[data-conversation-content][data-conversation-session="${window.CSS.escape(target.sessionId)}"]`;
     const row=await wait(()=>{
       const root=document.querySelector(scope);if(!root)return null;
+      if(target.compactionId){
+        const ids=[target.compactionId,target.commandId].filter(Boolean);
+        return [...root.querySelectorAll('[data-chat-flow-key]')].find(e=>ids.some(id=>(e.dataset.chatFlowKey??'').includes(id))&&e.getBoundingClientRect().height>0)??null;
+      }
       const rows=[...root.querySelectorAll(`[data-chat-turn="${target.turn}"]`)];
       const visible=e=>e.getBoundingClientRect().height>0&&!e.closest('[hidden]');
       return rows.find(e=>e.dataset.chatFlowKind==='user'&&visible(e)) ?? rows.find(visible);

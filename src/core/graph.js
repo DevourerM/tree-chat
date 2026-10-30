@@ -32,10 +32,15 @@ export function validateGraph(graph) {
   if (!Array.isArray(graph.undo) || !Array.isArray(graph.redo) || graph.undo.length > 30 || graph.redo.length > 30) throw new TreeError('无效的编辑历史');
   if (graph.nodes[ROOT]?.parent !== null || graph.nodes[ROOT]?.id !== ROOT) throw new TreeError('对话起点无效');
   if (Object.keys(graph.nodes).length > 20000) throw new TreeError('节点数量超过 20000');
+  if(graph.deletedCompactions!==undefined&&(!Array.isArray(graph.deletedCompactions)||graph.deletedCompactions.length>20000||graph.deletedCompactions.some(id=>typeof id!=='string'||!id||id.length>200)))throw new TreeError('无效的压缩删除记录');
   for (const [id, node] of Object.entries(graph.nodes)) {
     if (id !== node.id || !id || typeof node.label !== 'string' || node.label.length > 200 || (node.parent !== null && typeof node.parent !== 'string')) throw new TreeError('无效的节点');
     if (id !== ROOT && (!node.source || typeof node.source.sessionId !== 'string' || !Number.isSafeInteger(node.source.start) || !Number.isSafeInteger(node.source.end) || node.source.start < 0 || node.source.end < node.source.start)) throw new TreeError('无效的消息来源');
     if (node.parent !== null && !Object.hasOwn(graph.nodes, node.parent)) throw new TreeError('父节点不存在');
+    if(node.kind==='compaction'){
+      const c=node.compaction;
+      if(!c||typeof c.id!=='string'||!c.id||!Number.isSafeInteger(c.summarySeq)||!Number.isSafeInteger(c.replacementSeq)||!Number.isSafeInteger(c.endSeq)||c.summarySeq<node.source.start||c.replacementSeq<=c.summarySeq||c.endSeq<=c.replacementSeq||c.endSeq>node.source.end||(c.prefixKey!==null&&typeof c.prefixKey!=='string'))throw new TreeError('无效的压缩节点记录');
+    }
     if (node.position !== undefined && (!node.position || !Number.isFinite(node.position.x) || !Number.isFinite(node.position.y) || Math.abs(node.position.x)>1000000 || Math.abs(node.position.y)>1000000)) throw new TreeError('无效的节点位置');
   }
   // Linear-time cycle validation, including disconnected components.
@@ -134,6 +139,8 @@ export function editGraph(original, operation) {
       default: throw new TreeError('未知的编辑操作');
     }
   }
+  const removedCheckpoints=Object.values(original.nodes).filter(n=>n.kind==='compaction'&&!graph.nodes[n.id]).map(n=>n.compaction.id);
+  if(removedCheckpoints.length)graph.deletedCompactions=[...new Set([...(graph.deletedCompactions??[]),...removedCheckpoints])];
   reconcileGroupState(graph);
   if(['group-create','group-toggle','group-toggle-all','group-dissolve','group-split','group-delete'].includes(operation.type))arrangeVisibleGraph(graph,operation.includeInternal===true);
   for(const draft of Object.values(draftBranchesOf(graph)))if(!graph.nodes[draft.parent]||!graph.bindings[draft.sessionId]||!graph.bindings[draft.returnSessionId]||graph.bindings[draft.sessionId].head!==draft.parent)removeDraftBranch(graph,draft.sessionId);

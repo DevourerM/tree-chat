@@ -16,7 +16,7 @@ for(let offset=0;offset+512<=tar.length;){
 }
 for(const name of ['package.json','lib/index.js','lib/client.js','lib/host/index.js','lib/host/permissions.js','lib/core/graph.js','lib/core/presentation.js','lib/core/branches.js','lib/core/layout.js','lib/core/groups.js','lib/core/group-state.js','cordis.patch.yml','assets/tree.svg','locale/en.json','locale/zh.json','README.md','LICENSE'])assert.ok(files.has('package/'+name),`缺少 ${name}`);
 const manifest=JSON.parse(files.get('package/package.json'));
-for(const name of ['project-files','project-format','project-sync'])assert.ok(files.has(`package/lib/host/${name}.js`),`缺少项目同步运行文件 ${name}`);
+for(const name of ['project-files','project-format','project-sync','compaction'])assert.ok(files.has(`package/lib/host/${name}.js`),`缺少对话运行文件 ${name}`);
 assert.equal(manifest.dsh.bundle.patch,'./cordis.patch.yml');assert.equal(manifest.exports['./client'],'./lib/client.js');
 assert.equal(manifest.exports['./locale/*.json'],'./locale/*.json');
 assert.ok(files.get('package/lib/client.js').toString().includes('window.__ModuleLoader__.load'));

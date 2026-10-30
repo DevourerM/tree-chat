@@ -23,8 +23,8 @@ export function mapGraph(input,sessions){
     const colon=id.indexOf(':');return colon>0?`${sid(id.slice(0,colon))}${id.slice(colon)}`:id;
   };
   g.id=sid(g.id);g.active=nid(g.active);g.revision=0;g.undo=[];g.redo=[];
-  g.nodes=Object.fromEntries(Object.values(g.nodes).map(n=>{n.id=nid(n.id);n.parent=nid(n.parent);if(n.source)n.source.sessionId=sid(n.source.sessionId);return [n.id,n];}));
-  g.bindings=Object.fromEntries(Object.entries(g.bindings).map(([id,b])=>{delete b.autoArchived;delete b.rewind;b.head=nid(b.head);b.key=b.key.split('/').map(nid).join('/');return [sid(id),b];}));
+  g.nodes=Object.fromEntries(Object.values(g.nodes).map(n=>{n.id=nid(n.id);n.parent=nid(n.parent);if(n.source)n.source.sessionId=sid(n.source.sessionId);if(n.compaction?.prefixKey)n.compaction.prefixKey=n.compaction.prefixKey.split('/').map(nid).join('/');return [n.id,n];}));
+  g.bindings=Object.fromEntries(Object.entries(g.bindings).map(([id,b])=>{delete b.autoArchived;delete b.compactionRecoveryVersion;b.head=nid(b.head);b.key=b.key.split('/').map(nid).join('/');return [sid(id),b];}));
   for(const group of Object.values(g.groups??{})){group.entryId=nid(group.entryId);group.nodeIds=group.nodeIds.map(nid);}
   if(g.draftBranches)g.draftBranches=Object.fromEntries(Object.entries(g.draftBranches).map(([id,d])=>{d.sessionId=sid(id);d.parent=nid(d.parent);d.returnSessionId=sid(d.returnSessionId);return [d.sessionId,d];}));
   if(g.pendingBranch){const d=g.pendingBranch;d.sessionId=sid(d.sessionId);d.parent=nid(d.parent);d.returnSessionId=sid(d.returnSessionId);g.pendingBranch=g.draftBranches?.[d.sessionId]??d;}
@@ -79,7 +79,8 @@ export function markdownTree(graph,sources){
   for(const n of Object.values(graph.nodes))if(n.source){
     lines.push('',`## ${n.label.replace(/[\r\n]/g,' ')}`,'',`节点：\`${n.id}\``,'');
     const source=sources.get(n.source.sessionId);
-    for(const e of source?.surface??[])if(e.seq>=n.source.start&&e.seq<=n.source.end){
+    const records=n.kind==='compaction'?[source?.events[n.compaction.replacementSeq]].filter(Boolean):(source?.events??[]).filter(e=>e.seq>=n.source.start&&e.seq<=n.source.end&&e.surfaceOp==='append');
+    for(const e of records){
       const m=e.type==='user/message'?e.data:e.data?.message;if(!m?.content)continue;
       lines.push(`### ${m.role??e.type}`,'');
       for(const b of m.content){

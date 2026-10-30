@@ -27,6 +27,7 @@ export async function apply(ctx) {
   try { await ctx.sessionQuery.readSession('session-tree-demo'); exists=true; } catch(e) { if(e.code!=='SESSION_QUERY_SESSION_NOT_FOUND')throw e; }
   if(!exists){
   const data=process.env.TREE_AUTOMATION_FIXTURE?automationFixture():fixture(Number(process.env.TREE_FIXTURE_TURNS)||4); const preset=await ctx.agentPresets.resolve('minimal');
+  if(process.env.TREE_COMPACTION_FIXTURE)for(const event of data.events)if(event.type==='assistant/message')event.data.message.content.push({type:'text',text:' Completed research details and verified intermediate results.'.repeat(160)});
   if(process.env.TREE_MEDIA_FIXTURE){
     const attachments=ctx.get('attachments'),last=data.events.findLast(e=>e.type==='user/message');
     const image=await attachments.saveImage({data:await readFile(join(pluginRoot,'docs/images/tree-chat-1.1.png')),mediaType:'image/png',name:'sample.png'});

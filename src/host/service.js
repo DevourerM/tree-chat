@@ -6,6 +6,7 @@ import {draftBranchesOf,draftForNode,setDraftBranch,removeDraftBranch} from '../
 import {conversationView} from '../core/presentation.js';
 import {layoutGraph,PlacementIndex} from '../core/layout.js';
 import {PermissionBridge} from './permissions.js';
+import {conversationEntries,compactionBusy} from './compaction.js';
 
 /** Resolve the closest living node for a head that an edit removed from the tree. */
 function survivingHead(graph, head, before) {
@@ -52,7 +53,7 @@ export function repairBindings(graph, before) {
     if (Object.hasOwn(graph.nodes, binding.head)) {
       let key;
       try { key = pathKey(graph, binding.head); }
-      catch { continue; } // A disconnected branch has no path key; the user reconnects it by hand.
+      catch {if(!binding.rewind){binding.rewind=true;repaired.push(sessionId);}continue;} // Reconnect a detached path before generating.
       if (key !== binding.key) { binding.key = key; changed = true; }
     }
     if (changed) { binding.rewind = true; repaired.push(sessionId); }
@@ -62,9 +63,18 @@ export function repairBindings(graph, before) {
 
 export class TreeService {
   constructor(ctx, storage, permissionSetters) { this.ctx = ctx; this.storage = storage; this.loaded = new Map(); this.permissions=new PermissionBridge(ctx,permissionSetters); }
+  repair(graph){return repairBindings(graph);}
+  isBusy(graph){return Object.keys(graph.bindings).some(id=>this.ctx.agents.get(id)?.status==='running'||compactionBusy(this.ctx.sessions.get(id)?.snapshotEvents(0)??[]));}
+  contextNeedsRewind(graph,sessionId,source){
+    if(!source.activeCompactions.length)return false;
+    const path=pathTo(graph,graph.bindings[sessionId].head,false);if(path[0]?.id!==ROOT)return true;
+    const checkpoints=new Map(path.filter(n=>n.kind==='compaction').map(n=>[n.compaction.id,n]));
+    return source.activeCompactions.some(id=>{const node=checkpoints.get(id);return node?node.compaction.prefixKey!==pathKey(graph,node.parent):graph.deletedCompactions?.includes(id);});
+  }
   async transferPermissions(from,to) {
     if(from===to||!this.ctx.get('permissionPresets'))return;
     const source=await this.load(from),selection=this.permissions.capture(source.native);
+    if(compactionBusy(source.events)||compactionBusy(this.ctx.sessions.get(to)?.snapshotEvents(0)??[]))throw new TreeError('请等待上下文压缩完成后再切换分支',409);
     let agent=this.ctx.agents.get(to);
     if(agent?.status==='running')throw new TreeError('目标分支正在生成，请完成后再切换权限',409);
     if(!agent){
@@ -130,7 +140,11 @@ export class TreeService {
       }
       return event;
     });
-    const value = {events, surface, native, header: data.session, inheritedEventCount:native.inheritedEventCount,turns:turnsOf(events)};
+    const turns=turnsOf(events);
+    const inheritedCheckpoints=events.filter(e=>e.type==='user/message'&&e.surfaceOp==='append'&&['compact-checkpoint','compact-basic'].includes(e.data.source?.kind));
+    const activeCompactions=surface.filter(e=>e.type==='user/message'&&e.data.source?.compactionId).map(e=>e.data.source.compactionId);
+    const snapshot=end=>{const prefix=events.slice(0,end+1);return Session.create(sessionId,prefix,data.session,Math.min(native.inheritedEventCount,prefix.length),this.ctx.sessions.projections);};
+    const value = {events, surface, native, snapshot,header: data.session, inheritedEventCount:native.inheritedEventCount,turns,entries:conversationEntries(events,turns),inheritedCheckpoints,activeCompactions};
     this.loaded.delete(sessionId); this.loaded.set(sessionId, {cursor: events.at(-1)?.seq ?? -1, value});
     if (this.loaded.size > 12) this.loaded.delete(this.loaded.keys().next().value);
     return value;
@@ -167,17 +181,73 @@ export class TreeService {
     }
     return pending.size>0;
   }
+  async recoverInheritedCheckpoints(graph,sessionId,source,isCurrent){
+    const binding=graph.bindings[sessionId];
+    if(!source.inheritedCheckpoints.length||binding.compactionRecoveryVersion===1)return false;
+    binding.compactionRecoveryVersion=1;
+    const oldHead=binding.head,chain=pathTo(graph,oldHead,false);if(chain[0]?.id!==ROOT){binding.rewind=true;return true;}
+    const ids=new Set([graph.id,...chain.map(n=>n.source?.sessionId).filter(Boolean)]);
+    const markers=[...source.inheritedCheckpoints],sources=[];
+    for(const id of ids){const data=id===sessionId?source:await this.load(id).catch(()=>null);if(!data)continue;sources.push([id,data]);markers.push(...data.inheritedCheckpoints);}
+    const transactions=new Set(markers.map(e=>e.data.source?.compactionId).filter(Boolean)),messages=new Set(markers.map(e=>e.data.id));
+    for(const [owner,data]of sources)for(const record of data.entries.filter(e=>e.kind==='compaction')){
+      if(!transactions.has(record.compaction.id)&&!messages.has(data.events[record.compaction.replacementSeq].data.id))continue;
+      const path=pathTo(graph,binding.head),included=path.find(n=>n.compaction?.id===record.compaction.id);
+      if(included){if(included.compaction.prefixKey!==pathKey(graph,included.parent))binding.rewind=true;continue;}
+      const existing=Object.values(graph.nodes).find(n=>n.compaction?.id===record.compaction.id);
+      if(!existing&&graph.deletedCompactions?.includes(record.compaction.id)){binding.rewind=true;continue;}
+      let index=0;for(let i=1;i<path.length;i++)if(path[i].source?.sessionId===owner&&path[i].source.end<=record.end)index=i;
+      const parent=path[index].id,next=path[index+1],group=Object.values(graph.groups??{}).find(g=>g.nodeIds.includes(parent)&&g.nodeIds.includes(next?.id));
+      if(existing&&(existing.parent!==parent||group&&Object.values(graph.groups??{}).some(g=>g.id!==group.id&&g.nodeIds.includes(existing.id)))){binding.rewind=true;continue;}
+      const id=existing?.id??`${owner}:compact-${record.compaction.summarySeq}`;
+      if(!existing)graph.nodes[id]={id,parent,label:record.label,kind:'compaction',labelMode:'auto',createdAt:record.createdAt,
+        source:{sessionId:owner,start:record.start,end:record.end},compaction:{...record.compaction,prefixKey:binding.rewind?null:pathKey(graph,parent)},position:this.newPosition(graph,parent)};
+      if(next)next.parent=id;else binding.head=id;
+      if(group&&!group.nodeIds.includes(id))group.nodeIds.push(id);
+      if(graph.nodes[id].compaction.prefixKey!==pathKey(graph,parent))binding.rewind=true;
+      else try{await compilePath(graph,id,s=>this.load(s));}catch{if(!existing)graph.nodes[id].compaction.prefixKey=null;binding.rewind=true;}
+    }
+    binding.key=pathKey(graph,binding.head);
+    if(binding.head!==oldHead){
+      if(isCurrent||graph.active===oldHead&&!Object.entries(graph.bindings).some(([id,b])=>id!==sessionId&&b.head===oldHead))graph.active=binding.head;
+      const draft=draftBranchesOf(graph)[sessionId];if(draft?.parent===oldHead)setDraftBranch(graph,{...draft,parent:binding.head});
+    }
+    return true;
+  }
   async syncSessionTurns(graph, sessionId, sourceInput, isCurrentSession = true) {
     const binding = graph.bindings[sessionId];
     if (!binding) return false;
+    if(pathTo(graph,binding.head,false)[0]?.id!==ROOT)return false;
     const source = sourceInput ?? await this.load(sessionId);
-    const newTurns = source.turns.filter(t => t.end > binding.seen);
-    if (!newTurns.length) return false;
+    const recovered=await this.recoverInheritedCheckpoints(graph,sessionId,source,isCurrentSession);
+    const mismatched=!binding.rewind&&this.contextNeedsRewind(graph,sessionId,source);if(mismatched)binding.rewind=true;
+    const newTurns = source.entries.filter(t=>t.kind==='compaction'?t.compaction.endSeq>(binding.compactionSeen??-1):t.end>binding.seen);
+    if (!newTurns.length) return recovered||mismatched;
     const pending = draftBranchesOf(graph)[sessionId];
     if(pending&&graph.pendingBranch?.sessionId===sessionId)graph.pendingBranch=pending;
     let promoted = false;
     let placement;
     for (const turn of newTurns) {
+      if(turn.kind==='compaction'){
+        const known=Object.values(graph.nodes).find(n=>n.kind==='compaction'&&n.source.sessionId===sessionId&&n.compaction.summarySeq===turn.compaction.summarySeq);
+        const id=known?.id??`${sessionId}:compact-${turn.compaction.summarySeq}`;
+        binding.compactionSeen=Math.max(binding.compactionSeen??-1,turn.compaction.endSeq);
+        if(!known&&graph.deletedCompactions?.includes(turn.compaction.id)){binding.rewind=true;continue;}
+        if(!graph.nodes[id]){
+          // Upgrade trees that already contain later turns without attaching old side branches
+          // to a compression they never used. Only the next node owned by this native log moves.
+          const following=Object.values(graph.nodes).filter(n=>n.source?.sessionId===sessionId&&n.source.end>turn.end).sort((a,b)=>a.source.end-b.source.end)[0];
+          const parent=following?.parent??binding.head,prefixKey=!binding.rewind?pathKey(graph,parent):null;
+          graph.nodes[id]={id,parent,label:turn.label,kind:'compaction',labelMode:'auto',createdAt:turn.createdAt,
+            source:{sessionId,start:turn.start,end:turn.end},compaction:{...turn.compaction,prefixKey},position:this.newPosition(graph,parent)};
+          if(following){following.parent=id;for(const group of Object.values(graph.groups??{}))if(group.nodeIds.includes(parent)&&group.nodeIds.includes(following.id))group.nodeIds.push(id);}
+          else{binding.head=id;if(isCurrentSession)graph.active=id;}
+          // Old trees/files may have lost their native rewind flag. Prove the checkpoint
+          // against the actual selected history instead of trusting that flag or its label.
+          if(prefixKey!==null){try{await compilePath(graph,id,s=>this.load(s));}catch{graph.nodes[id].compaction.prefixKey=null;binding.rewind=true;}}
+        }
+        binding.seen=Math.max(binding.seen,turn.end);placement=undefined;continue;
+      }
       const promote=pending&&!promoted&&turn.kind==='user';
       const id = promote ? `pending:${sessionId}` : `${sessionId}:${turn.end}`;
       // A deleted historical node must never be resurrected by a polling read.
@@ -199,7 +269,7 @@ export class TreeService {
       }
       binding.head = id;
       if (isCurrentSession) graph.active = id;
-      binding.seen = turn.end;
+      binding.seen = Math.max(binding.seen,turn.end);
     }
     binding.key = pathKey(graph,binding.head);
     if (pending) {
@@ -216,6 +286,7 @@ export class TreeService {
       graph = newGraph(sessionId, this.resolveTreeTitle(source, '对话树'));
       graph.bindings[sessionId] = {head: ROOT, key: ROOT, seen: -1};
     }
+    const initiallyRepaired=repairBindings(graph);
     const originSource = sessionId === graph.id ? source : await this.load(graph.id).catch(() => null);
     let titleChanged = false;
     if (originSource) {
@@ -233,11 +304,15 @@ export class TreeService {
         removeDraftBranch(graph,draft.sessionId);changed=true;
       }
     }
-    const repaired = repairBindings(graph);
+    const repaired = [...initiallyRepaired,...repairBindings(graph)];
     if (changed) { graph.revision++; graph.undo = []; graph.redo = []; }
     else if (presentationChanged || titleChanged || repaired.length) graph.revision++;
     if (changed || created || presentationChanged || titleChanged || repaired.length) await this.storage.save(graph);
     return graph;
+  }
+  async syncCompaction(sessionId){
+    const graph=await this.storage.find(sessionId);if(!graph)return;
+    if(await this.syncSessionTurns(graph,sessionId,undefined,graph.active===graph.bindings[sessionId]?.head)){repairBindings(graph);graph.revision++;graph.undo=[];graph.redo=[];await this.storage.save(graph);}
   }
   async get(sessionId,knownRevision) {
     const graph=await this.sync(sessionId);
@@ -250,6 +325,13 @@ export class TreeService {
     const graph=await this.sync(sessionId), node=Object.hasOwn(graph.nodes,id)?graph.nodes[id]:undefined;
     if(!node)throw new TreeError('节点不存在');
     const current=await this.load(sessionId);
+    if(node.kind==='compaction'){
+      const destination=node.source.sessionId;
+      if(destination!==sessionId){await this.transferPermissions(sessionId,destination);await this.shelve(graph,destination);}
+      const source=await this.load(destination),summary=source.events[node.compaction.summarySeq];
+      if(summary?.type!=='compaction/summary')throw new TreeError('找不到这次压缩的原生记录');
+      return {sessionId:destination,seq:node.compaction.endSeq,compactionId:node.compaction.id,commandId:summary.data.sourceCommandId};
+    }
     if(id===ROOT){const first=current.events.find(e=>e.type==='user/message'&&e.data.source?.kind==='user')??current.events.find(e=>e.type==='user/message');if(!first)throw new TreeError('尚无聊天记录');return {sessionId,...messageLocation(current.events,first.data.id,first.seq)};}
     const source=node.source.sessionId===sessionId?current:await this.load(node.source.sessionId);
     const inputs=source.events.filter(e=>e.seq>=node.source.start&&e.seq<=node.source.end&&e.type==='user/message');
@@ -272,7 +354,7 @@ export class TreeService {
   async edit(sessionId, revision, operation) {
     const graph = await this.sync(sessionId);
     assertRevision(graph, revision);
-    if (!['move','reset-layout','arrange','rename'].includes(operation.type) && (!operation.type?.startsWith('group-')||operation.type==='group-delete') && Object.keys(graph.bindings).some(id => this.ctx.agents.get(id)?.status === 'running')) throw new TreeError('请等待这棵树中的对话完成后再调整上下文', 409);
+    if (!['move','reset-layout','arrange','rename'].includes(operation.type) && (!operation.type?.startsWith('group-')||operation.type==='group-delete') && this.isBusy(graph)) throw new TreeError('请等待这棵树中的生成或上下文压缩完成后再调整上下文', 409);
     const updated = editGraph(graph, operation);
     // A delete or reparent can remove or move the node a native branch is bound to. Repair the
     // mapping in the same write so an interrupted client can never leave the tree unreadable.
@@ -304,7 +386,7 @@ export class TreeService {
   async activate(sessionId, revision, id, force = false, rewind = false) {
     const graph = await this.sync(sessionId);
     assertRevision(graph, revision);
-    if (Object.keys(graph.bindings).some(s => this.ctx.agents.get(s)?.status === 'running')) throw new TreeError('请等待当前生成结束后再切换上下文', 409);
+    if(this.isBusy(graph))throw new TreeError('请等待当前生成或上下文压缩结束后再切换上下文',409);
     const key = pathKey(graph, id);
     // A repaired binding still points at the right node but its native context belongs to the
     // pre-edit path. Activating the same position replaces it instead of trusting the mapping.
@@ -353,7 +435,7 @@ export class TreeService {
     // A rewind hands this tree position over to the new native context; the previous session
     // leaves the tree instead of keeping a mapping whose compiled path no longer matches it.
     const replaced = takeOver();
-    graph.bindings[newId] = {head: id, key, seen: handle.agent.session.seq - 1};
+    graph.bindings[newId] = {head: id, key, seen: handle.agent.session.seq - 1,compactionRecoveryVersion:1};
     graph.active = id; graph.revision++;
     await this.storage.save(graph);
     if (workspace) await workspace.attachSession(newId);
@@ -363,7 +445,7 @@ export class TreeService {
   }
   async branch(sessionId,revision,id){
     let graph=await this.sync(sessionId);assertRevision(graph,revision);
-    if(Object.keys(graph.bindings).some(s=>this.ctx.agents.get(s)?.status==='running'))throw new TreeError('请等待当前生成结束后再新建分支',409);
+    if(this.isBusy(graph))throw new TreeError('请等待当前生成或上下文压缩结束后再新建分支',409);
     const empty=draftForNode(graph,id);
     if(empty){await this.transferPermissions(sessionId,empty.sessionId);setDraftBranch(graph,empty);await this.shelve(graph,empty.sessionId);return {sessionId:empty.sessionId,graph:publicGraph(graph)};}
     if(!Object.hasOwn(graph.nodes,id))throw new TreeError('节点不存在');
@@ -388,7 +470,7 @@ export class TreeService {
     let graph=await this.sync(sessionId);assertRevision(graph,revision);
     const draft=id?draftForNode(graph,id):draftBranchesOf(graph)[sessionId]??graph.pendingBranch;
     if(!draft)throw new TreeError('该分支已产生消息，请使用节点菜单管理');
-    if(Object.keys(graph.bindings).some(s=>this.ctx.agents.get(s)?.status==='running'))throw new TreeError('请等待当前生成结束',409);
+    if(this.isBusy(graph))throw new TreeError('请等待当前生成或上下文压缩结束',409);
     let target=sessionId;
     if(target===draft.sessionId)target=draft.returnSessionId;
     if(!graph.bindings[target] || !graph.nodes[graph.bindings[target]?.head])target=graph.id;

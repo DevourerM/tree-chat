@@ -1,3 +1,19 @@
+import {surfaceOrigins} from '../src/host/context.js';
+
+/** Append the same durable transaction and replacement shape as DSH compact-basic. */
+export function compactFixture(data,{throughTurn=2,id=`compaction-${data.events.length}`,cancelled=false}={}){
+  const events=data.events,{nodes}=surfaceOrigins(events);
+  const first=nodes.findIndex(seq=>events[seq].type==='user/message');
+  const last=nodes.findLastIndex(seq=>events[seq].type==='assistant/message'&&events[seq].data.turn===throughTurn);
+  if(first<0||last<first)throw Error('Fixture has no compactable range');
+  const selected=nodes.slice(first,last+1),add=(type,body,extra={})=>{const e={type,data:body,seq:events.length,time:2000+events.length,...extra};events.push(e);return e;};
+  const start=add('compaction/start',{compactionId:id,turn:null});
+  if(cancelled){add('compaction/end',{compactionId:id,turn:null,error:[{name:'AbortError',message:'cancelled'}]});return data;}
+  const summary=add('compaction/summary',{compactionId:id,summary:`摘要 ${id}`,shadowedRange:{start:selected[0],end:selected.at(-1)},shadowedSeqs:selected,shadowedTokenCount:100,provider:'test',model:'test'});
+  add('user/message',{id:`summary-${id}`,role:'user',source:{kind:'compact-checkpoint',compactionId:id},content:[{type:'text',text:`摘要 ${id}`}]},{surfaceOp:{op:'replace',startSeq:selected[0],endSeq:selected.at(-1)},sourceEventSeqs:[start.seq,summary.seq,...selected]});
+  add('compaction/end',{compactionId:id,turn:null});
+  data.surface=surfaceOrigins(events).nodes.map(seq=>events[seq]);return data;
+}
 export function fixture(count = 4, tools = false) {
   const events = []; let serial = 0;
   const message = (role, text) => ({id: `msg-${++serial}`, role, source: {kind: role === 'assistant' ? 'model' : role === 'system' ? 'system-prompt' : 'user', ...(role === 'assistant' ? {provider: 'test', model: 'test'} : {})}, content: [{type:'text',text}]});
