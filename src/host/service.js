@@ -221,7 +221,7 @@ export class TreeService {
     const source = sourceInput ?? await this.load(sessionId);
     const recovered=await this.recoverInheritedCheckpoints(graph,sessionId,source,isCurrentSession);
     const mismatched=!binding.rewind&&this.contextNeedsRewind(graph,sessionId,source);if(mismatched)binding.rewind=true;
-    const newTurns = source.entries.filter(t=>t.kind==='compaction'?t.compaction.endSeq>(binding.compactionSeen??-1):t.end>binding.seen);
+    const newTurns = source.entries.filter(t=>t.kind==='compaction'?t.compaction.endSeq>(binding.compactionSeen??-1):t.end>(binding.turnSeen??binding.seen));
     if (!newTurns.length) return recovered||mismatched;
     const pending = draftBranchesOf(graph)[sessionId];
     if(pending&&graph.pendingBranch?.sessionId===sessionId)graph.pendingBranch=pending;
@@ -250,7 +250,13 @@ export class TreeService {
       }
       const promote=pending&&!promoted&&turn.kind==='user';
       const id = promote ? `pending:${sessionId}` : `${sessionId}:${turn.end}`;
-      // A deleted historical node must never be resurrected by a polling read.
+      const canonical=`${sessionId}:${turn.end}`;
+      // A deleted historical node must never be resurrected by a polling read. Match the source
+      // identity, not only the node id: "保留后续" drops numeric/imported ids that a later get
+      // would otherwise recreate from the unchanged native log.
+      if(graph.deletedTurns?.includes(canonical)&&!Object.values(graph.nodes).some(n=>n.source?.sessionId===sessionId&&n.source.end===turn.end)){
+        binding.rewind=true;binding.turnSeen=Math.max(binding.turnSeen??-1,turn.end);continue;
+      }
       if (!graph.nodes[id]) {
         const parent = graph.nodes[binding.head] ? binding.head : graph.active;
         let position;
@@ -270,6 +276,7 @@ export class TreeService {
       binding.head = id;
       if (isCurrentSession) graph.active = id;
       binding.seen = Math.max(binding.seen,turn.end);
+      binding.turnSeen = Math.max(binding.turnSeen??-1,turn.end);
     }
     binding.key = pathKey(graph,binding.head);
     if (pending) {

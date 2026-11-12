@@ -24,6 +24,16 @@ test('断开、重新连接与禁止环路',()=>{
   graph=editGraph(graph,{type:'reparent',id:'3',parent:'1'});assert.equal(pathKey(graph,'4'),'root/1/3/4');
   assert.throws(()=>editGraph(graph,{type:'reparent',id:'1',parent:'4'}),/循环/);
 });
+test('删除后续只移除所选节点之后的分支，当前节点和旁枝保留',()=>{
+  const graph=chain();graph.nodes.side={...graph.nodes['2'],id:'side',parent:'1'};
+  const edited=editGraph(graph,{type:'delete',id:'2',suffix:true});
+  assert.deepEqual(pathTo(edited,'2').map(n=>n.id),['root','1','2']);
+  assert.equal(edited.nodes['3'],undefined);assert.equal(edited.nodes['4'],undefined);
+  assert.ok(edited.nodes.side);assert.equal(edited.active,'2');
+  assert.ok(edited.deletedTurns.includes(`${graph.id}:${graph.nodes['3'].source.end}`));
+  assert.throws(()=>editGraph(edited,{type:'delete',id:'2',suffix:true}),/没有后续/);
+  assert.equal(pathKey(editGraph(edited,{type:'undo'}),'4'),'root/1/2/3/4');
+});
 test('整枝删除保留其他枝，禁止删除根，版本冲突',()=>{
   const graph=chain();graph.nodes.side={...graph.nodes['2'],id:'side',parent:'1'};
   const edited=editGraph(graph,{type:'delete',id:'2',subtree:true});

@@ -402,6 +402,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
   const membership=presentation.groupMembership.get(selectedId),memberGroup=graph.groups?.[membership];
   const groupCandidate=selectedIds.length>=2?validateGroupCandidate(presentation.graph.nodes,selectedIds):{ok:false};
   const hasRealChild = Object.values(presentation.graph.nodes).some(n => n.parent === selectedId && n.kind !== 'pending');
+  const hasSuffix = hasRealChild;
   const leaf = node && !isDraft && !hasRealChild;
   const dirty = graph.bindings[sessionId]?.rewind||activePath.join('/') !== graph.bindings[sessionId]?.key;
   const lod = view.zoom < .6;
@@ -422,6 +423,12 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
     h('input',{type:'file',ref:fileInput,accept:'.json,application/json',hidden:true,'aria-hidden':true,tabIndex:-1,onChange:e=>{const file=e.target.files?.[0];e.target.value='';importTree(file);}}),
     error && h('div', {className: 'st-error', role: 'alert'}, h('span', null, error), h(Button, {icon: 'close', label: '关闭提示', onClick: () => setError('')})),
     dirty && h('div', {className: 'st-notice'}, h('span',null,'上下文待应用'),h(Button,{label:'应用当前路径',disabled:busy,onClick:applyCurrent,children:'应用当前路径'})),
+    confirm && h('div',{className:'st-dialog st-confirm',role:'alertdialog','aria-modal':true,'aria-label':confirm.type==='group-delete'?'删除集合':confirm.type==='delete-suffix'?'删除后续':'删除节点',onPointerDown:e=>e.stopPropagation(),onClick:e=>e.stopPropagation()},
+      h('strong',null,confirm.type==='group-delete'?'删除集合内的所有节点？':confirm.type==='delete-suffix'?'删除这个节点之后的所有节点？':'如何删除这个节点？'),
+      h('p',null,confirm.type==='delete-suffix'?'当前节点保留，之后的分支会从树中移除，可撤销。':'保留后续会自动接好上下文，可撤销。'),
+      confirm.type==='delete-suffix'
+        ? h('div',{className:'st-confirm-actions'},h(Button,{label:'删除后续',onClick:()=>run(()=>mutate({type:'delete',id:confirm.id,suffix:true})),children:'删除后续'}),h(Button,{label:'取消',onClick:()=>setConfirm(null),children:'取消'}))
+        : h('div',{className:'st-confirm-actions'},h(Button,{label:'删除并保留后续',onClick:()=>run(()=>mutate({type:confirm.type,id:confirm.id,grouped:!showInternal})),children:'保留后续'}),h(Button,{label:'删除整枝',onClick:()=>run(()=>mutate({type:confirm.type,id:confirm.id,subtree:true})),children:'删除整枝'}),h(Button,{label:'取消',onClick:()=>setConfirm(null),children:'取消'}))),
     h('div', {className: `st-canvas${lod?' st-lod':''}${Object.keys(moving).length?' st-node-dragging':''}${selectionBox?' st-box-select':''}`, ref: viewport, tabIndex: 0, 'aria-label': '对话树画布，左键或中键拖动空白平移，右键拖动空白框选，滚轮缩放', style:{'--st-zoom':view.zoom,backgroundSize:`${24*view.zoom}px ${24*view.zoom}px`,backgroundPosition:`${view.x}px ${view.y}px`},
       onContextMenu:e=>{if(!e.target.closest('.st-node'))e.preventDefault();},
       onKeyDown: e => {
@@ -439,7 +446,7 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
       },
       onWheel: e => {if(nodeDrag.current||marquee.current||drag.current)return;const rect = viewport.current.getBoundingClientRect(); zoomTo(view.zoom * Math.exp(-e.deltaY * .0015), {x: e.clientX - rect.left, y: e.clientY - rect.top});},
       onPointerDown: e => {
-        if (e.target.closest('button,input,.st-node')||busyRef.current||![0,1,2].includes(e.button)) return;
+        if (e.target.closest('button,input,.st-node,.st-dialog')||busyRef.current||![0,1,2].includes(e.button)) return;
         finishMarquee();drag.current=null;
         e.preventDefault();e.currentTarget.focus();navigation.cancel();setMenu(null);viewTouched.current = true;e.currentTarget.setPointerCapture(e.pointerId);
         if(e.button===2){
@@ -541,14 +548,11 @@ function TreePanel({sessionId, ctx, navigation, useTabInfo}) {
         memberGroup&&h('button',{role:'menuitem',className:'st-danger',disabled:busy,onClick:()=>{setConfirm({type:'group-delete',id:membership});setMenu(null);}},'删除所属集合…'),
         h('button',{role:'menuitem',onClick:()=>{setRename(node.label);setMenu(null);}},'重命名节点'),
         !connected&&h('button',{role:'menuitem',disabled:busy,onClick:()=>run(()=>mutate({type:'reparent',id:selectedId,parent:'root'}))},'接回起点'),
-        selectedId!=='root'&&h('button',{role:'menuitem',className:'st-danger',onClick:()=>{setConfirm({type:'delete',id:selectedId});setMenu(null);}},'删除节点…'))),
+        selectedId!=='root'&&h('button',{role:'menuitem',className:'st-danger',onClick:()=>{setConfirm({type:'delete',id:selectedId});setMenu(null);}},'删除节点…'),
+        h('button',{role:'menuitem',className:'st-danger',disabled:busy||!hasSuffix,onClick:()=>{setConfirm({type:'delete-suffix',id:selectedId});setMenu(null);}},'删除后续…'))),
     groupDialog&&h(GroupDialog,{key:`${groupDialog.type}:${groupDialog.id??'new'}`,value:groupDialog,graph,busy,onCancel:()=>setGroupDialog(null),onCommit:commitGroup}),
     projectDialog&&h(ProjectDialog,{sessionId,ctx,onClose:()=>setProjectDialog(false),onStatus:setProjectSummary,onImported:result=>{setProjectDialog(false);setProjectSummary({enabled:false,error:null});setSelectedIds([]);setSelected(result.graph.active);viewTouched.current=false;navigate(result,result.graph.active);}}),
-    rename!==null && h('form',{className:'st-dialog st-rename',role:'dialog','aria-label':isGroup?'重命名集合':'重命名节点',onSubmit:e=>{e.preventDefault();run(()=>mutate({type:'rename',id:selectedId,label:rename}));}},h('input',{value:rename,onChange:e=>setRename(e.target.value),maxLength:isGroup?80:200,'aria-label':isGroup?'集合名称':'节点名称',autoFocus:true}),h('button',{type:'submit',disabled:busy},'保存'),h('button',{type:'button',onClick:()=>setRename(null)},'取消')),
-    confirm && h('div',{className:'st-dialog st-confirm',role:'alertdialog','aria-label':confirm.type==='group-delete'?'删除集合':'删除节点'},
-      h('strong',null,confirm.type==='group-delete'?'删除集合内的所有节点？':'如何删除这个节点？'),
-      h('p',null,'保留后续会自动接好上下文，可撤销。'),
-      h('div',{className:'st-confirm-actions'},h(Button,{label:'删除并保留后续',onClick:()=>run(()=>mutate({type:confirm.type,id:confirm.id,grouped:!showInternal})),children:'保留后续'}),h(Button,{label:'删除整枝',onClick:()=>run(()=>mutate({type:confirm.type,id:confirm.id,subtree:true})),children:'删除整枝'}),h(Button,{label:'取消',onClick:()=>setConfirm(null),children:'取消'}))));
+    rename!==null && h('form',{className:'st-dialog st-rename',role:'dialog','aria-label':isGroup?'重命名集合':'重命名节点',onSubmit:e=>{e.preventDefault();run(()=>mutate({type:'rename',id:selectedId,label:rename}));}},h('input',{value:rename,onChange:e=>setRename(e.target.value),maxLength:isGroup?80:200,'aria-label':isGroup?'集合名称':'节点名称',autoFocus:true}),h('button',{type:'submit',disabled:busy},'保存'),h('button',{type:'button',onClick:()=>setRename(null)},'取消')));
 }
 
 function HeaderButton({ctx, sessionId, selectView}) {

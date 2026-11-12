@@ -12,7 +12,7 @@ tree-chat 是采用 DSH 标准插件格式的第三方插件，使用原生右�
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 插件版本 | **1.3.2**（当前源码），**1.3.1**（下方发行包） |
+| 插件版本 | **1.3.3** |
 | 已验证宿主 | **DeepSeek Harness 0.2.0-rc.2 / 0.2.1-rc.2 / 0.2.1-rc.3 / 0.2.1-rc.5 / 0.2.2-rc.1 / 0.2.2-rc.2** |
 | 已验证系统 | Windows |
 | 插件格式 | 标准 `dsh.bundle` + `dsh.client` |
@@ -28,7 +28,7 @@ tree-chat 是采用 DSH 标准插件格式的第三方插件，使用原生右�
 2. 在 **包名或地址** 中粘贴完整地址：
 
    ```text
-   https://github.com/DevourerM/tree-chat/releases/download/v1.3.1/tree-chat-1.3.1.tgz
+   https://github.com/DevourerM/tree-chat/releases/download/v1.3.3/tree-chat-1.3.3.tgz
    ```
 
 3. 确认插件为 **tree-chat**，点击 **安装**。
@@ -40,17 +40,17 @@ tree-chat 是采用 DSH 标准插件格式的第三方插件，使用原生右�
 也可在同一输入框使用固定标签的 Git 地址：
 
 ```text
-git+https://github.com/DevourerM/tree-chat.git#v1.3.1
+git+https://github.com/DevourerM/tree-chat.git#v1.3.3
 ```
 
 推荐 `.tgz` 地址，它不要求安装 Git。插件尚未发布到 npm，请不要只填写 `tree-chat`，以免解析到其他来源的同名包。
 
 ### 网络受限时离线安装
 
-从 [Releases](https://github.com/DevourerM/tree-chat/releases) 下载 `tree-chat-1.3.1.tgz`，在 DSH 的同一输入框填写其**本机绝对路径**，例如：
+从 [Releases](https://github.com/DevourerM/tree-chat/releases) 下载 `tree-chat-1.3.3.tgz`，在 DSH 的同一输入框填写其**本机绝对路径**，例如：
 
 ```text
-C:\Downloads\tree-chat-1.3.1.tgz
+C:\Downloads\tree-chat-1.3.3.tgz
 ```
 
 选择发行附件 `.tgz`，不要选 GitHub 自动生成的 “Source code” ZIP。远程 Web Host 的本地路径指向 Host 电脑，而不是浏览器所在电脑。
@@ -159,6 +159,12 @@ C:\Downloads\tree-chat-1.3.1.tgz
 ```
 
 后续聊天基于新路径。插件会生成合适的原生上下文会话，不改写原始聊天文件。**删除整枝** 则移除所选节点及其后代在树中的位置。
+
+选择节点 2，打开 **… → 删除后续… → 删除后续**，则保留节点 2，移除它之后的所有分支：
+
+```text
+起点 → 1 → 2
+```
 
 默认折叠视图中，删除用户节点也会移除归属该输入的内部续跑轮次，避免工具结果或自动续跑单独残留。旧数据里未连接的分支，可使用节点菜单 **接回起点**。
 

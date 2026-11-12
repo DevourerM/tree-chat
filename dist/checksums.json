@@ -1,8 +1,8 @@
 {
-  "file": "tree-chat-1.3.2.tgz",
-  "version": "1.3.2",
-  "shasum": "54a1c046818d499fac6d480e0be45dc7f16f24a2",
-  "integrity": "sha512-L4VW7d+mj/JdWC8jLRIRUVnQ0s0AIU07oE7QVofhviibZL0+7QdogSHGG0F1/KGaIeyEHUJsuHRb1txnS5F0xQ==",
-  "size": 81623,
+  "file": "tree-chat-1.3.3.tgz",
+  "version": "1.3.3",
+  "shasum": "995460bb985ae150dcf490f4d1c8c83df6ee7236",
+  "integrity": "sha512-8kqa6pWsbcLyMOx7WQ+lS95MZ3yezx0Qzg/3B2MsGKQRiQ6M1Ihztwu/FOa+R0sT4MePVMVDqCacv1pA5j2Znw==",
+  "size": 82323,
   "files": 26
 }

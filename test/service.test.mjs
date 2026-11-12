@@ -458,6 +458,51 @@ test('TreeService: 分阶段验证 internal 轮次先完成保留待输入节点
   assert.deepEqual(promotedUserNode.position, {x: 240, y: 310}, '转正后的真实用户节点必须继承最新拖动坐标');
 });
 
+test('TreeService: 删除后续后轮询不得复活已删分支，当前节点保留', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules();
+  await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
+  const host=createMockHost(Session,4),storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','service-delete-suffix-'))),service=new TreeService(host.ctx,storage);
+  let graph=await service.get('session-root');
+  const turns=Object.values(graph.nodes).filter(n=>n.source);
+  graph=await service.edit('session-root',graph.revision,{type:'delete',id:turns[1].id,suffix:true});
+  assert.ok(graph.nodes[turns[1].id]);assert.equal(graph.nodes[turns[2].id],undefined);assert.equal(graph.nodes[turns[3].id],undefined);
+  const polled=await service.get('session-root');
+  assert.ok(polled.nodes[turns[1].id]);
+  assert.equal(Object.values(polled.nodes).some(n=>n.label==='问题 3'||n.label==='问题 4'),false);
+  const resumed=await service.activate('session-root',polled.revision,turns[1].id,false,true);
+  assert.deepEqual(host.liveSessions.get(resumed.sessionId).deriveMessages().filter(m=>m.role==='user').map(m=>m.content[0].text),['问题 1','问题 2']);
+});
+
+test('TreeService: 删除并保留后续后，轮询原生日志不得把已删轮次重新挂回', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
+  const {Session,TreeService}=await loadHostModules();
+  await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
+  const host=createMockHost(Session,4),storage=new TreeStorage(await mkdtemp(join(process.cwd(),'artifacts','service-delete-bridge-'))),service=new TreeService(host.ctx,storage);
+  let graph=await service.get('session-root');
+  const turns=Object.values(graph.nodes).filter(n=>n.source);
+  const removed=turns[1];
+  graph=await service.edit('session-root',graph.revision,{type:'delete',id:removed.id,grouped:true});
+  assert.equal(graph.nodes[removed.id],undefined);
+  assert.equal(graph.nodes[turns[2].id].parent,turns[0].id,'后续节点接到被删节点的上游');
+  assert.ok(graph.deletedTurns?.includes(`${removed.source.sessionId}:${removed.source.end}`));
+  const polled=await service.get('session-root');
+  assert.equal(polled.nodes[removed.id],undefined,'删除后的轮询不得按旧节点 id 复活');
+  assert.equal(Object.values(polled.nodes).some(n=>n.label===removed.label),false,'删除后的轮询不得按原生日志重新创建同一轮次');
+  assert.equal(polled.nodes[turns[2].id].parent,turns[0].id);
+  assert.equal(polled.bindings['session-root'].rewind,true,'原生日志仍含已删轮次时必须重建上下文');
+  const resumed=await service.activate('session-root',polled.revision,polled.bindings['session-root'].head,false,true);
+  assert.deepEqual(host.liveSessions.get(resumed.sessionId).deriveMessages().filter(m=>m.role==='user').map(m=>m.content[0].text),['问题 1','问题 3','问题 4']);
+  const stable=await service.get(resumed.sessionId);
+  assert.equal(Object.values(stable.nodes).some(n=>n.label==='问题 2'),false);
+  const undone=await service.edit(resumed.sessionId,stable.revision,{type:'undo'});
+  assert.ok(undone.nodes[removed.id],'撤销必须恢复被删节点，删除记录不能挡住它');
+  const afterUndo=await service.get(resumed.sessionId);
+  assert.ok(afterUndo.nodes[removed.id]);
+  host.appendUserTurn(resumed.sessionId,'问题 删除后继续');
+  const continued=await service.get(resumed.sessionId);
+  assert.ok(Object.values(continued.nodes).some(n=>n.label==='问题 删除后继续'),'墓碑只挡住被删轮次，后续新消息仍要入树');
+  assert.equal(Object.values(continued.nodes).some(n=>n.label==='问题 2'&&n.id!==removed.id),false);
+});
+
 test('TreeService: 删除当前枝梢节点后映射立即回落到上级，activate 交接新上下文并归档旧会话', {skip:!runtimeDir&&'未配置 DSH_DEV_RUNTIME'},async()=>{
   const {Session,TreeService}=await loadHostModules();
   await mkdir(join(process.cwd(),'artifacts'),{recursive:true});
