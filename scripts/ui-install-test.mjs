@@ -18,7 +18,8 @@ try{
   if(await accountPrompt.count())await accountPrompt.getByRole('button',{name:'关闭',exact:true}).click();
   await page.screenshot({path:join(artifactsDir,'install-ui-before.png'),fullPage:true});
   await page.getByText('插件',{exact:true}).first().click();
-  await page.getByRole('button',{name:'添加插件',exact:true}).click();
+  // The DSH plugin header can clip this button. Keyboard activation still follows the UI.
+  await page.getByRole('button',{name:'添加插件',exact:true}).and(page.locator(':enabled')).press('Enter');
   const {version}=JSON.parse(await readFile(join(pluginRoot,'package.json'),'utf8'));
   const packageSpec=process.env.TREE_PLUGIN_SPEC || join(pluginRoot,`dist/tree-chat-${version}.tgz`);
   await page.getByRole('textbox',{name:'包名或地址',exact:true}).fill(packageSpec);
